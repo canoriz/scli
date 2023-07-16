@@ -32,7 +32,7 @@ func main() {
 	scli.Build(&op, checkArgumentValidity).Parse()
 	fmt.Printf("parse command line\n%+v\n", op)
 
-	// you can also []string parser
+	// you can also parse []string
 	scli.Build(&op).ParseArgs(strings.Split(
 		"-h host.com -n 70 -i 1,3,5 -t -nm cindy,david", " ",
 	))
