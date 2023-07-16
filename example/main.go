@@ -10,7 +10,6 @@ import (
 
 // define arguments struct
 // define flag, default and usage in struct field's tags
-// supported types: int, float64, bool, string, []int, []float, []bool, []string
 type options struct {
 	Host string `flag:"h" usage:"hostname"`
 	Port string `flag:"p" default:"80" usage:"port"`
@@ -28,17 +27,16 @@ type options struct {
 func main() {
 	var op options // init a empty argument struct
 
-	// build parser then parse []string
+	// build CLI parser with checkArgumentValidity checker
 	// checkArgumentValidity is optional
-	scli.Build(&op, checkArgumentValidity).ParseArgs(strings.Split(
+	scli.Build(&op, checkArgumentValidity).Parse()
+	fmt.Printf("parse command line\n%+v\n", op)
+
+	// you can also []string parser
+	scli.Build(&op).ParseArgs(strings.Split(
 		"-h host.com -n 70 -i 1,3,5 -t -nm cindy,david", " ",
 	))
 	fmt.Printf("parse []string\n%+v\n", op)
-
-	// build parser with checkArgumentValidity checker, then
-	// parse command line arguments
-	scli.Build(&op, checkArgumentValidity).Parse()
-	fmt.Printf("parse command line\n%+v\n", op)
 }
 
 // define a post parse checker, return error if none of tcp or udp is enabled,

@@ -14,7 +14,7 @@ var (
 	errNotSupportedSliceType = "in Build(&struct{ ...; v []Type; ...}), Type must be int|float64|string|bool, found: %v %v"
 	errDefaultValue          = "parse default value (%v %v = %v) error"
 	errNotSupportedType      = "in Build(&struct{ ...; v Type; ...}), Type must be int|float64|string|bool, found: %v %v"
-	errPostCheck             = "Argument parse success, post check failed: %v\n"
+	errPostCheck             = "Argument parse success, post check failed:\n\t* %v\n"
 )
 
 type postCheckErr struct{ e error }
