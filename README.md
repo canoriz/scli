@@ -1,5 +1,5 @@
 # scli
-To create CLI application use `scli`, all you need is defining an argument struct.
+Defining an argument struct and calling `scli` is all you need to create a CLI application.
 
 Supported types are `int`, `float64`, `bool`, `string` and their slice types.
 
@@ -31,7 +31,7 @@ func main() {
 	scli.Build(&op, checkArgumentValidity).Parse()
 	fmt.Printf("parse command line\n%+v\n", op)
 
-	// you can also []string parser
+	// you can also parse []string
 	scli.Build(&op).ParseArgs(strings.Split(
 		"-h host.com -n 70 -i 1,3,5 -t -nm cindy,david", " ",
 	))
@@ -50,8 +50,6 @@ func checkArgumentValidity(v *options) error {
 
 Run `./main --help`
 ```
-parse []string
-{Host:host.com Port:80 Num:70 Ratio:3.14159 Tcp:true Udp:false Names:[cindy david] Index:[1 3 5]}
 Usage of ./example:
   -Ratio float
          (default 3.14159)
