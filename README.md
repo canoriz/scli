@@ -81,6 +81,6 @@ struct field's type and tags, if error found in type and tags,
 `Build` panics and tells the detailed error. `Build` is considered
 as compile time. At Stage 2, `ParseArgs` never panics, if parse
 failed, error is returned. `Parse`, used as the root parser of
-command arguments, if failed, program exits. `Parse` is considered
+command arguments, if failed, program exits. `Parse`, `ParseArgs` is considered
 runtime.
 
