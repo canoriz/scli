@@ -265,11 +265,12 @@ func (a *arrOf[T]) String() string {
 	return strings.Join(sslice, ",")
 }
 
+type appendElemFn[T bool | int | string | float64] func(*arrOf[T], string) error
+
 func (a *arrOf[T]) Set(s string) error {
 	var zero T
 	a.arr = []T{} // clear default value
-	type appendElemFn func(*arrOf[T], string) error
-	appendElemFnBuilder := func(parseFn func(string) (any, error)) appendElemFn {
+	appendElemFnBuilder := func(parseFn func(string) (any, error)) appendElemFn[T] {
 		return func(a *arrOf[T], t string) error {
 			n, err := parseFn(t)
 			if err != nil {
@@ -279,7 +280,7 @@ func (a *arrOf[T]) Set(s string) error {
 			return nil
 		}
 	}
-	var appendElem appendElemFn
+	var appendElem appendElemFn[T]
 
 	switch reflect.TypeOf(zero).Kind() {
 	case reflect.Int:
