@@ -1,0 +1,167 @@
+package scli
+
+import (
+	"errors"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+type panicCase struct {
+	about     string
+	panicCode func()
+}
+
+type addr struct {
+	ip   string
+	port string
+}
+
+func (a *addr) FromString(s string) error {
+	ss := strings.Split(s, ":")
+	if len(ss) < 2 {
+		return errors.New("x")
+	}
+	a.ip = ss[0]
+	a.port = ss[1]
+	return nil
+}
+
+var (
+	panicCases = []panicCase{{
+		"wrong default",
+		func() {
+			var s0 struct {
+				Float1 float64 `default:"-19.x923"`
+			}
+			BuildParser(&s0)
+		}}, {
+		"nil pointer",
+		func() {
+			s0 := new(struct {
+				Float1 float64 `default:"-19.923"`
+			})
+			s0 = nil
+			BuildParser(s0)
+		}}, {
+		"not struct",
+		func() {
+			var s0 int
+			BuildParser(&s0)
+		}}, {
+		"custom field not impl Parse",
+		func() {
+			type a []string
+			var s0 struct {
+				v a
+			}
+			BuildParser(&s0)
+		}}, {
+		"custom field wrong default",
+		func() {
+			var s0 struct {
+				d addr `default:"133"`
+			}
+			BuildParser(&s0)
+		}}, {
+		"help is argument",
+		func() {
+			var s0 struct {
+				Float1 float64 `flag:"help"`
+			}
+			BuildParser(&s0)
+		}},
+	}
+
+	parseError = []struct {
+		about string
+		arg   string
+	}{{
+		"no required option",
+		"add -n 2 -/b high",
+	}, {
+		"option no value",
+		"-vsz",
+	}, {
+		"not defined option",
+		"-fff",
+	}, {
+		"not defined cmd",
+		"fffcmd",
+	}, {
+		"sub cmd error",
+		"-vsz 12 add -n 2 -/b low",
+	}, {
+		"custom parse error",
+		"-vsz 12 -s xx",
+	}, {
+		"parse error",
+		"-vsz a",
+	}}
+)
+
+func TestPanic(t *testing.T) {
+	for _, c := range panicCases {
+		t.Run(c.about, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Errorf("The code did not panic")
+				}
+			}()
+			c.panicCode()
+		})
+	}
+}
+
+type Arg struct {
+	Size   int  `flag:"sz" default:"12" usage:"block size"`
+	VSize  int  `flag:"vsz" usage:"vblock size"`
+	Source addr `flag:"s" default:"127.0.0.1:1001" usage:"destination"`
+	Add    add  `flag:"add"`
+	Delete struct {
+		Name int `flag:"n" usage:"delete file"`
+	}
+}
+
+type add struct {
+	Name string `flag:"n"  usage:"add file"`
+	B    bool   `flag:"b"`
+	High high   `flag:"high"`
+}
+
+type high struct {
+	Name string `flag:"n" default:"no" usage:"number"`
+}
+
+func TestParseError(t *testing.T) {
+	var a Arg
+	for _, c := range parseError {
+		t.Run(c.about, func(t *testing.T) {
+			_, _, err := BuildParser(&a).ParseArg(strings.Split(c.arg, " "))
+			if err == nil {
+				t.Error("should error")
+			}
+		})
+	}
+}
+
+func TestParseOk(t *testing.T) {
+	var a Arg
+	input := "-sz 14 -vsz 3 -s 18:13 add -n a -/b high -n af"
+	expected := Arg{
+		Size:   14,
+		VSize:  3,
+		Source: addr{ip: "18", port: "13"},
+		Add:    add{Name: "a", B: false, High: high{Name: "af"}},
+	}
+	r, c, err := BuildParser(&a).ParseArg(strings.Split(input, " "))
+	if err != nil {
+		t.Error(err)
+	}
+	if len(c) != 2 && c[0] != "add" && c[1] != "high" {
+		t.Errorf("subcommand chain error: expected add, high, get %v", c)
+	}
+	if !reflect.DeepEqual(expected, a) {
+		t.Errorf("expected: %+v, get %+v", expected, r)
+	}
+}

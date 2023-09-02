@@ -8,42 +8,48 @@ import (
 	"github.com/canoriz/scli"
 )
 
-// define arguments struct
-// define flag, default and usage in struct field's tags
-type options struct {
-	Host string `flag:"h" usage:"hostname"`
-	Port string `flag:"p" default:"80" usage:"port"`
+type arr []string
 
-	Num   int     `flag:"n"`
-	Ratio float64 `default:"3.14159"`
-
-	Tcp bool `flag:"t" usage:"use tcp"`
-	Udp bool `flag:"u" usage:"use udp"`
-
-	Names []string `flag:"nm" default:"alice,bob" usage:"names"`
-	Index []int    `flag:"i" default:"1,2,3"`
+func (a *arr) FromString(s string) error {
+	*a = strings.Split(s, ",")
+	return nil
 }
+
+type addr struct {
+	ip   string
+	port string
+}
+
+func (a *addr) FromString(s string) error {
+	r := strings.Split(s, ":")
+	if len(r) < 2 {
+		return errors.New("not correct")
+	}
+	a.ip = r[0]
+	a.port = r[1]
+	return nil
+}
+
+type Arg struct {
+	Size   int  `flag:"sz" default:"12" usage:"block size"`
+	VSize  int  `flag:"vsz" usage:"vblock size"`
+	Source addr `flag:"s" default:"127.0.0.1:1001" usage:"destination"`
+	Add    struct {
+		Name string `flag:"n"  usage:"add file"`
+		B    bool   `flag:"b"`
+		High struct {
+			Name string `flag:"n" default:"no" usage:"name"`
+		} `flag:"high"`
+	} `flag:"add"`
+	Delete struct {
+		Name int `flag:"n" usage:"delete file"`
+	}
+}
+
+var a Arg
 
 func main() {
-	var op options // init a empty argument struct
-
-	// build CLI parser with checkArgumentValidity checker
-	// checkArgumentValidity is optional
-	scli.Build(&op, checkArgumentValidity).Parse()
-	fmt.Printf("parse command line\n%+v\n", op)
-
-	// you can also parse []string
-	scli.Build(&op).ParseArgs(strings.Split(
-		"-h host.com -n 70 -i 1,3,5 -t -nm cindy,david", " ",
-	))
-	fmt.Printf("parse []string\n%+v\n", op)
-}
-
-// define a post parse checker, return error if none of tcp or udp is enabled,
-// Parse() will exit and print usage, ParseArgs() will return this error
-func checkArgumentValidity(v *options) error {
-	if v.Tcp == v.Udp {
-		return errors.New("exactly one of tcp or udp must be enabled")
-	}
-	return nil
+	var arg Arg
+	scli.BuildParser(&arg).Parse()
+	fmt.Printf("%+v\n", arg)
 }
