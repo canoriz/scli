@@ -154,7 +154,8 @@ func TestParseOk(t *testing.T) {
 		Source: addr{ip: "18", port: "13"},
 		Add:    add{Name: "a", B: false, High: high{Name: "af"}},
 	}
-	r, c, err := BuildParser(&a).ParseArg(strings.Split(input, " "))
+	parser := BuildParser(&a)
+	r, c, err := parser.ParseArg(strings.Split(input, " "))
 	if err != nil {
 		t.Error(err)
 	}
@@ -163,5 +164,9 @@ func TestParseOk(t *testing.T) {
 	}
 	if !reflect.DeepEqual(expected, a) {
 		t.Errorf("expected: %+v, get %+v", expected, r)
+	}
+	if parser.Help() == "" {
+		t.Log(parser.Help())
+		t.Error("should have help")
 	}
 }

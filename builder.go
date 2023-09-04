@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -17,33 +18,37 @@ var (
 	ErrIsHelp = errors.New("argument is help message")
 )
 
-const (
-	errNoValue        = `no value provided for argument "--%s" in %s`
-	errNoArgument     = `argument "--%s" provided in "%s" but not defined`
-	errNoSubcommand   = `subcommand "%s" provided in "%s" but not defined`
-	errParseArg       = `error parsing argument "--%s %s" error: %w`
+const ( // build time errors
 	errParseDefault   = `error parsing default value "%s" of field "%s", error: %w`
 	errHelpIsReserved = `"help" is a reserved word, please change option name of "%s"`
-	errArgNotFound    = `argument "--%s" is required in "%s" but not provided`
 	errNotImplParse   = "type of field %s did not implement `Parse` interface"
+)
+
+const ( // runtime errors
+	errNoValue      = `no value provided for argument "--%s" in %s`
+	errNoArgument   = `argument "--%s" provided in "%s" but not defined`
+	errNoSubcommand = `subcommand "%s" provided in "%s" but not defined`
+	errParseArg     = `error parsing argument "--%s %s" error: %w`
+	errArgNotFound  = `argument "--%s" is required in "%s" but not provided`
 )
 
 type Subcommand string
 
 type parseResult struct {
-	Rv       reflect.Value
-	SubCmd   []Subcommand
-	HelpText string
+	rv          reflect.Value
+	subCmdChain []string
+	helpText    string
 }
 
 func (p parseResult) IsHelp() bool {
-	return p.HelpText != ""
+	return p.helpText != ""
 }
 
 type parseFn func([]string) (parseResult, error)
 
 type Parser[T any] struct {
 	parse parseFn
+	help  string
 }
 
 func (p Parser[T]) ParseArg(s []string) (zero T, cmdChain []string, err error) {
@@ -54,11 +59,7 @@ func (p Parser[T]) ParseArg(s []string) (zero T, cmdChain []string, err error) {
 	if r.IsHelp() {
 		return zero, cmdChain, ErrIsHelp
 	}
-	cmdChain = make([]string, len(r.SubCmd))
-	for i, c := range r.SubCmd {
-		cmdChain[i] = string(c)
-	}
-	return r.Rv.Interface().(T), cmdChain, nil
+	return r.rv.Interface().(T), r.subCmdChain, nil
 }
 
 func (p Parser[T]) Parse() (t T, cmdChain []string) {
@@ -68,30 +69,30 @@ func (p Parser[T]) Parse() (t T, cmdChain []string) {
 		os.Exit(-2)
 	}
 	if r.IsHelp() {
-		fmt.Print(r.HelpText)
+		fmt.Print(r.helpText)
 		os.Exit(0)
 	}
-	cmdChain = make([]string, len(r.SubCmd))
-	for i, c := range r.SubCmd {
-		cmdChain[i] = string(c)
-	}
-	return r.Rv.Interface().(T), cmdChain
+	return r.rv.Interface().(T), r.subCmdChain
+}
+
+func (p Parser[T]) Help() string {
+	return p.help
 }
 
 func BuildParser[T any](u *T) Parser[T] {
-	return Parser[T]{checkTopAndBuildParseFn(u, os.Args[0])}
+	parse, help := checkTopAndBuildParseFn(u, os.Args[0])
+	return Parser[T]{parse, help}
 }
 
-func checkTopAndBuildParseFn(u any, execName string) parseFn {
+func checkTopAndBuildParseFn(u any, execName string) (parseFn, string) {
 	if err := checkType(u); err != nil {
 		panic(err)
 	}
-	p, _ := buildParseFn(
+	return buildParseFn(
 		reflect.ValueOf(u).Elem().Type().Name(),
 		execName,
 		reflect.ValueOf(u),
 	)
-	return p
 }
 
 func checkType(u any) error {
@@ -163,7 +164,7 @@ func buildParseFn(fieldChain string, viewNameChain string, u reflect.Value) (p p
 				realOption := strings.Trim(first, "-/")
 				if realOption == "help" {
 					return parseResult{
-						HelpText: makeUsageText(viewNameChain, arg, command),
+						helpText: makeUsageText(viewNameChain, arg, command),
 					}, nil
 				}
 				t, ok := arg[realOption]
@@ -194,7 +195,7 @@ func buildParseFn(fieldChain string, viewNameChain string, u reflect.Value) (p p
 							errParseArg, first, strings.Join(val, ""), err,
 						)
 					}
-					argStructPtr.FieldByName(t.fullName).Set(r.Rv)
+					argStructPtr.FieldByName(t.fullName).Set(r.rv)
 				}
 				input = input[t.consumeLen:]
 			default: // subcommand
@@ -210,9 +211,9 @@ func buildParseFn(fieldChain string, viewNameChain string, u reflect.Value) (p p
 				if r.IsHelp() {
 					return r, nil
 				}
-				argStructPtr.FieldByName(t.fullName).Set(r.Rv)
-				ret.SubCmd = append(
-					[]Subcommand{Subcommand(first)}, r.SubCmd...,
+				argStructPtr.FieldByName(t.fullName).Set(r.rv)
+				ret.subCmdChain = append(
+					[]string{first}, r.subCmdChain...,
 				)
 				input = input[:0] // break for
 			}
@@ -228,7 +229,7 @@ func buildParseFn(fieldChain string, viewNameChain string, u reflect.Value) (p p
 								"Cannot parse error at parse",
 						)
 					}
-					argStructPtr.FieldByName(info.fullName).Set(r.Rv)
+					argStructPtr.FieldByName(info.fullName).Set(r.rv)
 				} else {
 					return parseResult{}, fmt.Errorf(
 						errArgNotFound,
@@ -238,10 +239,28 @@ func buildParseFn(fieldChain string, viewNameChain string, u reflect.Value) (p p
 				}
 			}
 		}
-		ret.Rv = argStructPtr
+		ret.rv = argStructPtr
 		return ret, nil
 	}
 	return parse, makeUsageText(viewNameChain, arg, command)
+}
+
+type mapString[V any] struct {
+	key string
+	val V
+}
+
+func sortMap[V any](m map[string]V) []mapString[V] {
+	r := make([]mapString[V], len(m))
+	i := 0
+	for k, v := range m {
+		r[i] = mapString[V]{k, v}
+		i++
+	}
+	sort.Slice(r, func(i, j int) bool {
+		return r[i].key < r[j].key
+	})
+	return r
 }
 
 func makeUsageText(viewNameChain string, arg map[string]argInfo, command map[string]cmdInfo) string {
@@ -256,7 +275,9 @@ func makeUsageText(viewNameChain string, arg map[string]argInfo, command map[str
 		return ss
 	}
 	argList := []string{"-help, --help", shiftFour("show this help message")}
-	for argName, info := range arg {
+	for _, a := range sortMap(arg) {
+		info := a.val
+		argName := a.key
 		argUsage := func() string {
 			if info.ty == boolArg {
 				if info.usage != "" {
@@ -291,7 +312,9 @@ func makeUsageText(viewNameChain string, arg map[string]argInfo, command map[str
 		}
 	}
 	cmdList := []string{}
-	for cmd, info := range command {
+	for _, c := range sortMap(command) {
+		cmd := c.key
+		info := c.val
 		cmdList = append(cmdList, cmd)
 		if info.usage != "" {
 			cmdList = append(cmdList, shiftFour(info.usage))
@@ -333,7 +356,7 @@ func buildArgAndCommandList(
 			arg[flagName] = argInfo{
 				func(s []string) (parseResult, error) {
 					return parseResult{
-						Rv: reflect.ValueOf(strings.Join(s, "")),
+						rv: reflect.ValueOf(strings.Join(s, "")),
 					}, nil
 				},
 				defName,
@@ -347,7 +370,7 @@ func buildArgAndCommandList(
 				func(s []string) (parseResult, error) {
 					b, e := strconv.ParseBool(strings.Join(s, ""))
 					return parseResult{
-						Rv: reflect.ValueOf(b),
+						rv: reflect.ValueOf(b),
 					}, e
 				},
 				defName,
@@ -361,7 +384,7 @@ func buildArgAndCommandList(
 				func(s []string) (parseResult, error) {
 					b, e := strconv.ParseInt(strings.Join(s, ""), 0, 64)
 					return parseResult{
-						Rv: reflect.ValueOf(int(b)),
+						rv: reflect.ValueOf(int(b)),
 					}, e
 				},
 				defName,
@@ -375,7 +398,7 @@ func buildArgAndCommandList(
 				func(s []string) (parseResult, error) {
 					b, e := strconv.ParseFloat(strings.Join(s, ""), 64)
 					return parseResult{
-						Rv: reflect.ValueOf(b),
+						rv: reflect.ValueOf(b),
 					}, e
 				},
 				defName,
@@ -435,7 +458,7 @@ func customParser(r reflect.Value) (p parseFn, err error) {
 		return func(s []string) (parseResult, error) {
 			e := implParse.FromString(strings.Join(s, ""))
 			return parseResult{
-				Rv: r, // r will be updated by FromString
+				rv: r, // r will be updated by FromString
 			}, e
 		}, nil
 	}
