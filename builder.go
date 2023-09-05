@@ -21,7 +21,7 @@ var (
 const ( // build time errors
 	errParseDefault   = `error parsing default value "%s" of field "%s", error: %w`
 	errHelpIsReserved = `"help" is a reserved word, please change option name of "%s"`
-	errNotImplParse   = "type of field %s did not implement `Parse` interface"
+	errNotImplParse   = "*T did not implement `Parse` interface, where T is type of field %s"
 )
 
 const ( // runtime errors
