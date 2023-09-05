@@ -27,6 +27,13 @@ func (a *addr) FromString(s string) error {
 	return nil
 }
 
+type upper string
+
+func (u *upper) FromString(s string) error {
+	*u = upper(strings.ToUpper(s))
+	return nil
+}
+
 var (
 	panicCases = []panicCase{{
 		"wrong default",
@@ -114,10 +121,11 @@ func TestPanic(t *testing.T) {
 }
 
 type Arg struct {
-	Size   int  `flag:"sz" default:"12" usage:"block size"`
-	VSize  int  `flag:"vsz" usage:"vblock size"`
-	Source addr `flag:"s" default:"127.0.0.1:1001" usage:"destination"`
-	Add    add  `flag:"add"`
+	Size   int   `flag:"sz" default:"12" usage:"block size"`
+	VSize  int   `flag:"vsz" usage:"vblock size"`
+	Source addr  `flag:"s" default:"127.0.0.1:1001" usage:"destination"`
+	Big    upper `flag:"big" default:"qwerty" usage:"to upper case"`
+	Add    add   `flag:"add"`
 	Delete struct {
 		Name int `flag:"n" usage:"delete file"`
 	}
@@ -147,10 +155,11 @@ func TestParseError(t *testing.T) {
 
 func TestParseOk(t *testing.T) {
 	var a Arg
-	input := "-sz 14 -vsz 3 -s 18:13 add -n a -/b high -n af"
+	input := "-sz 14 -big qwerty -vsz 3 -s 18:13 add -n a -/b high -n af"
 	expected := Arg{
 		Size:   14,
 		VSize:  3,
+		Big:    "QWERTY",
 		Source: addr{ip: "18", port: "13"},
 		Add:    add{Name: "a", B: false, High: high{Name: "af"}},
 	}

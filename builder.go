@@ -351,74 +351,74 @@ func buildArgAndCommandList(
 		usage := defField.Tag.Get("usage")
 
 		valField := argStructPtr.Field(i)
-		switch valField.Kind() {
-		case reflect.String:
+		p, e := customParser(valField)
+		if e == nil { // has implemented Parse
 			arg[flagName] = argInfo{
-				func(s []string) (parseResult, error) {
-					return parseResult{
-						rv: reflect.ValueOf(strings.Join(s, "")),
-					}, nil
-				},
+				p,
 				defName,
 				argLen,
 				valArg,
 				defaultVal,
 				usage,
 			}
-		case reflect.Bool:
-			arg[flagName] = argInfo{
-				func(s []string) (parseResult, error) {
-					b, e := strconv.ParseBool(strings.Join(s, ""))
-					return parseResult{
-						rv: reflect.ValueOf(b),
-					}, e
-				},
-				defName,
-				boolArgLen,
-				boolArg,
-				defaultVal,
-				usage,
-			}
-		case reflect.Int:
-			arg[flagName] = argInfo{
-				func(s []string) (parseResult, error) {
-					b, e := strconv.ParseInt(strings.Join(s, ""), 0, 64)
-					return parseResult{
-						rv: reflect.ValueOf(int(b)),
-					}, e
-				},
-				defName,
-				argLen,
-				valArg,
-				defaultVal,
-				usage,
-			}
-		case reflect.Float64:
-			arg[flagName] = argInfo{
-				func(s []string) (parseResult, error) {
-					b, e := strconv.ParseFloat(strings.Join(s, ""), 64)
-					return parseResult{
-						rv: reflect.ValueOf(b),
-					}, e
-				},
-				defName,
-				argLen,
-				valArg,
-				defaultVal,
-				usage,
-			}
-		case reflect.Struct:
-			p, e := customParser(valField)
-			if e == nil {
+		} else {
+			switch valField.Kind() {
+			case reflect.String:
 				arg[flagName] = argInfo{
-					p,
+					func(s []string) (parseResult, error) {
+						return parseResult{
+							rv: reflect.ValueOf(strings.Join(s, "")),
+						}, nil
+					},
 					defName,
 					argLen,
 					valArg,
 					defaultVal,
 					usage,
 				}
-			} else {
+			case reflect.Bool:
+				arg[flagName] = argInfo{
+					func(s []string) (parseResult, error) {
+						b, e := strconv.ParseBool(strings.Join(s, ""))
+						return parseResult{
+							rv: reflect.ValueOf(b),
+						}, e
+					},
+					defName,
+					boolArgLen,
+					boolArg,
+					defaultVal,
+					usage,
+				}
+			case reflect.Int:
+				arg[flagName] = argInfo{
+					func(s []string) (parseResult, error) {
+						b, e := strconv.ParseInt(strings.Join(s, ""), 0, 64)
+						return parseResult{
+							rv: reflect.ValueOf(int(b)),
+						}, e
+					},
+					defName,
+					argLen,
+					valArg,
+					defaultVal,
+					usage,
+				}
+			case reflect.Float64:
+				arg[flagName] = argInfo{
+					func(s []string) (parseResult, error) {
+						b, e := strconv.ParseFloat(strings.Join(s, ""), 64)
+						return parseResult{
+							rv: reflect.ValueOf(b),
+						}, e
+					},
+					defName,
+					argLen,
+					valArg,
+					defaultVal,
+					usage,
+				}
+			case reflect.Struct:
 				parseFn, usageText := buildParseFn(
 					fmt.Sprintf("%s.%s", fieldChain, defName),
 					fmt.Sprintf("%s %s", viewNameChain, flagName),
@@ -431,22 +431,11 @@ func buildArgAndCommandList(
 					usage,
 					usageText,
 				}
-			}
-		default:
-			p, e := customParser(valField)
-			if e != nil {
+			default:
 				return arg, command, fmt.Errorf(
 					errNotImplParse,
 					fmt.Sprintf("%s.%s", fieldChain, defName),
 				)
-			}
-			arg[flagName] = argInfo{
-				p,
-				defName,
-				argLen,
-				valArg,
-				defaultVal,
-				usage,
 			}
 		}
 	}
@@ -454,6 +443,9 @@ func buildArgAndCommandList(
 }
 
 func customParser(r reflect.Value) (p parseFn, err error) {
+	if !r.CanAddr() {
+		return p, errors.New("can not addr")
+	}
 	if implParse, ok := r.Addr().Interface().(Parse); ok {
 		return func(s []string) (parseResult, error) {
 			e := implParse.FromString(strings.Join(s, ""))
@@ -462,7 +454,7 @@ func customParser(r reflect.Value) (p parseFn, err error) {
 			}, e
 		}, nil
 	}
-	return p, errors.New("x")
+	return p, errors.New("does not implement Parse")
 }
 
 func validateArgAndCommand(
