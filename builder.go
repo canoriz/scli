@@ -171,7 +171,7 @@ func buildParseFn(fieldChain string, viewNameChain string, u reflect.Value) (p p
 				if !ok {
 					return parseResult{}, fmt.Errorf(
 						errNoArgument,
-						first,
+						realOption,
 						viewNameChain,
 					)
 				}
