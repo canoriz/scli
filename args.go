@@ -28,7 +28,7 @@ type copyArg struct {
 	sa any // sa: slice of *arrOf[T]
 }
 
-type parser[T any] struct {
+type argParser[T any] struct {
 	fs              *flag.FlagSet
 	copyAfterParsed []copyArg
 
@@ -37,7 +37,7 @@ type parser[T any] struct {
 }
 
 // Parse() parses flags from command line
-func (p parser[T]) Parse() {
+func (p argParser[T]) Parse() {
 	if err := p.ParseArgs(os.Args[1:]); err != nil {
 		if err == flag.ErrHelp {
 			os.Exit(0)
@@ -51,7 +51,7 @@ func (p parser[T]) Parse() {
 }
 
 // ParseArgs([]string) parses flags from input
-func (p parser[T]) ParseArgs(args []string) error {
+func (p argParser[T]) ParseArgs(args []string) error {
 	if err := p.fs.Parse(args); err != nil {
 		return err
 	}
@@ -75,12 +75,12 @@ func (p parser[T]) ParseArgs(args []string) error {
 	return nil
 }
 
-func (p parser[T]) Usage() {
+func (p argParser[T]) Usage() {
 	p.fs.Usage()
 }
 
 func buildSliceParser[T bool | int | string | float64, StructT any](
-	p *parser[StructT],
+	p *argParser[StructT],
 	flagName, defaultVal, usage string,
 	valField reflect.Value,
 	fieldName string,
@@ -99,7 +99,7 @@ func buildSliceParser[T bool | int | string | float64, StructT any](
 	})
 }
 
-func Build[T any](u T, postCheck ...func(T) error) parser[T] {
+func Build[T any](u T, postCheck ...func(T) error) argParser[T] {
 	ptr := reflect.ValueOf(u) // any -> *T
 	if ptr.Kind() != reflect.Pointer || ptr.IsNil() {
 		panic("in Build(v), type(v) must be non nil *struct{...}")
@@ -110,7 +110,7 @@ func Build[T any](u T, postCheck ...func(T) error) parser[T] {
 	}
 	structDef := argStructPtr.Type()
 
-	ret := parser[T]{
+	ret := argParser[T]{
 		fs: flag.NewFlagSet(os.Args[0], flag.ContinueOnError),
 
 		structPtr: u,

@@ -14,6 +14,12 @@ type Parse interface {
 	FromString(s string) error
 }
 
+type Parser[T any] interface {
+	Help() string
+	Parse() (t T, cmdChain []string)
+	ParseArg(s []string) (zero T, cmdChain []string, err error)
+}
+
 var (
 	ErrIsHelp = errors.New("argument is help message")
 )
@@ -32,8 +38,6 @@ const ( // runtime errors
 	errArgNotFound  = `argument "--%s" is required in "%s" but not provided`
 )
 
-type Subcommand string
-
 type parseResult struct {
 	rv          reflect.Value
 	subCmdChain []string
@@ -46,12 +50,12 @@ func (p parseResult) IsHelp() bool {
 
 type parseFn func([]string) (parseResult, error)
 
-type Parser[T any] struct {
+type parser[T any] struct {
 	parse parseFn
 	help  string
 }
 
-func (p Parser[T]) ParseArg(s []string) (zero T, cmdChain []string, err error) {
+func (p parser[T]) ParseArg(s []string) (zero T, cmdChain []string, err error) {
 	r, e := p.parse(s)
 	if e != nil {
 		return zero, cmdChain, e
@@ -62,7 +66,7 @@ func (p Parser[T]) ParseArg(s []string) (zero T, cmdChain []string, err error) {
 	return r.rv.Interface().(T), r.subCmdChain, nil
 }
 
-func (p Parser[T]) Parse() (t T, cmdChain []string) {
+func (p parser[T]) Parse() (t T, cmdChain []string) {
 	r, e := p.parse(os.Args[1:])
 	if e != nil {
 		fmt.Fprintln(os.Stderr, e)
@@ -75,13 +79,13 @@ func (p Parser[T]) Parse() (t T, cmdChain []string) {
 	return r.rv.Interface().(T), r.subCmdChain
 }
 
-func (p Parser[T]) Help() string {
+func (p parser[T]) Help() string {
 	return p.help
 }
 
 func BuildParser[T any](u *T) Parser[T] {
 	parse, help := checkTopAndBuildParseFn(u, os.Args[0])
-	return Parser[T]{parse, help}
+	return parser[T]{parse, help}
 }
 
 func checkTopAndBuildParseFn(u any, execName string) (parseFn, string) {
