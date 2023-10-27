@@ -125,8 +125,8 @@ type Arg struct {
 	VSize  int   `flag:"vsz" usage:"vblock size"`
 	Source addr  `flag:"s" default:"127.0.0.1:1001" usage:"destination"`
 	Big    upper `flag:"big" default:"qwerty" usage:"to upper case"`
-	Add    add   `flag:"add"`
-	Delete struct {
+	Add    *add  `flag:"add"`
+	Delete *struct {
 		Name int `flag:"n" usage:"delete file"`
 	}
 }
@@ -134,7 +134,7 @@ type Arg struct {
 type add struct {
 	Name string `flag:"n"  usage:"add file"`
 	B    bool   `flag:"b"`
-	High high   `flag:"high"`
+	High *high  `flag:"high"`
 }
 
 type high struct {
@@ -145,7 +145,7 @@ func TestParseError(t *testing.T) {
 	var a Arg
 	for _, c := range parseError {
 		t.Run(c.about, func(t *testing.T) {
-			_, _, err := BuildParser(&a).ParseArg(strings.Split(c.arg, " "))
+			_, err := BuildParser(&a).ParseArg(strings.Split(c.arg, " "))
 			if err == nil {
 				t.Error("should error")
 			}
@@ -161,15 +161,12 @@ func TestParseOk(t *testing.T) {
 		VSize:  3,
 		Big:    "QWERTY",
 		Source: addr{ip: "18", port: "13"},
-		Add:    add{Name: "a", B: false, High: high{Name: "af"}},
+		Add:    &add{Name: "a", B: false, High: &high{Name: "af"}},
 	}
 	parser := BuildParser(&a)
-	r, c, err := parser.ParseArg(strings.Split(input, " "))
+	r, err := parser.ParseArg(strings.Split(input, " "))
 	if err != nil {
 		t.Error(err)
-	}
-	if len(c) != 2 && c[0] != "add" && c[1] != "high" {
-		t.Errorf("subcommand chain error: expected add, high, get %v", c)
 	}
 	if !reflect.DeepEqual(expected, a) {
 		t.Errorf("expected: %+v, get %+v", expected, r)

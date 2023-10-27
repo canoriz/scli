@@ -16,8 +16,8 @@ type Parse interface {
 
 type Parser[T any] interface {
 	Help() string
-	Parse() (t T, cmdChain []string)
-	ParseArg(s []string) (zero T, cmdChain []string, err error)
+	Parse() T
+	ParseArg(s []string) (zero T, err error)
 }
 
 var (
@@ -28,6 +28,7 @@ const ( // build time errors
 	errParseDefault   = `error parsing default value "%s" of field "%s", error: %w`
 	errHelpIsReserved = `"help" is a reserved word, please change option name of "%s"`
 	errNotImplParse   = "*T did not implement `Parse` interface, where T is type of field %s"
+	errNotStructPtr   = "*T must be *struct{...}, where T is type of field %s"
 )
 
 const ( // runtime errors
@@ -39,9 +40,8 @@ const ( // runtime errors
 )
 
 type parseResult struct {
-	rv          reflect.Value
-	subCmdChain []string
-	helpText    string
+	rv       reflect.Value
+	helpText string
 }
 
 func (p parseResult) IsHelp() bool {
@@ -55,18 +55,18 @@ type parser[T any] struct {
 	help  string
 }
 
-func (p parser[T]) ParseArg(s []string) (zero T, cmdChain []string, err error) {
+func (p parser[T]) ParseArg(s []string) (zero T, err error) {
 	r, e := p.parse(s)
 	if e != nil {
-		return zero, cmdChain, e
+		return zero, e
 	}
 	if r.IsHelp() {
-		return zero, cmdChain, ErrIsHelp
+		return zero, ErrIsHelp
 	}
-	return r.rv.Interface().(T), r.subCmdChain, nil
+	return r.rv.Interface().(T), nil
 }
 
-func (p parser[T]) Parse() (t T, cmdChain []string) {
+func (p parser[T]) Parse() T {
 	r, e := p.parse(os.Args[1:])
 	if e != nil {
 		fmt.Fprintln(os.Stderr, e)
@@ -76,7 +76,7 @@ func (p parser[T]) Parse() (t T, cmdChain []string) {
 		fmt.Print(r.helpText)
 		os.Exit(0)
 	}
-	return r.rv.Interface().(T), r.subCmdChain
+	return r.rv.Interface().(T)
 }
 
 func (p parser[T]) Help() string {
@@ -145,7 +145,7 @@ type cmdInfo struct {
 
 func buildParseFn(fieldChain string, viewNameChain string, u reflect.Value) (p parseFn, usageText string) {
 	argStructPtr := u.Elem() // *T -> T
-	structDef := argStructPtr.Type()
+	structDef := u.Type().Elem()
 
 	arg, command, err := buildArgAndCommandList(
 		fieldChain, viewNameChain, structDef, argStructPtr,
@@ -215,10 +215,7 @@ func buildParseFn(fieldChain string, viewNameChain string, u reflect.Value) (p p
 				if r.IsHelp() {
 					return r, nil
 				}
-				argStructPtr.FieldByName(t.fullName).Set(r.rv)
-				ret.subCmdChain = append(
-					[]string{first}, r.subCmdChain...,
-				)
+				argStructPtr.FieldByName(t.fullName).Set(r.rv.Addr())
 				input = input[:0] // break for
 			}
 		}
@@ -422,11 +419,23 @@ func buildArgAndCommandList(
 					defaultVal,
 					usage,
 				}
-			case reflect.Struct:
+			case reflect.Pointer:
+				// should be *struct{...}
+				// valField is reflect.Value of *struct{}
+				structType := valField.Type().Elem() // struct{}
+				// ptrStruct := reflect.New(structType) // *struct{...}
+				if structType.Kind() != reflect.Struct {
+					return arg, command, fmt.Errorf(
+						errNotStructPtr,
+						fmt.Sprintf("%s.%s", fieldChain, defName),
+					)
+				}
+
+				instance := reflect.New(structType)
 				parseFn, usageText := buildParseFn(
 					fmt.Sprintf("%s.%s", fieldChain, defName),
 					fmt.Sprintf("%s %s", viewNameChain, flagName),
-					valField.Addr())
+					instance)
 				command[flagName] = cmdInfo{
 					parseFn,
 					defName,

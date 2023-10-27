@@ -34,14 +34,14 @@ type Arg struct {
 	Size   int  `flag:"sz" default:"12" usage:"block size"`
 	VSize  int  `flag:"vsz" usage:"vblock size"`
 	Source addr `flag:"s" default:"127.0.0.1:1001" usage:"destination"`
-	Add    struct {
+	Add    *struct {
 		Name string `flag:"n"  usage:"add file"`
 		B    bool   `flag:"b"`
-		High struct {
+		High *struct {
 			Name string `flag:"n" default:"no" usage:"name"`
 		} `flag:"high"`
 	} `flag:"add"`
-	Delete struct {
+	Delete *struct {
 		Name int `flag:"n" usage:"delete file"`
 	}
 }
