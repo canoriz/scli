@@ -1,82 +1,119 @@
 # scli
 Defining an argument struct and calling `scli` is all you need to create a CLI application.
 
-Supported types are `int`, `float64`, `bool`, `string` and their slice types.
+`scli` supports `int`, `float64`, `bool`, `string` or any type implemented `scli.Parse`
+arguments and arbitrary layer of subcommands with these types of arguments.
 
-`scli` is inspired by Rust's clap, s for struct and simple. `scli` use Go std `flag` package to
-create CLI.
+Any argument/subcommand `scli` supports can have a configurable CLI argument name, default value and
+usage message.
+
+`scli` can directly parse arguments from CLI, or from `string`. You can test your configuration
+by parse `string`.
+
 ## Usage
 ```go
+// this is same as example/simple/main.go
+package main
+
+import (
+    "fmt"
+    "strings"
+
+    "github.com/canoriz/scli"
+)
+
 // define arguments struct
 // define flag, default and usage in struct field's tags
 type options struct {
-	Host string `flag:"h" usage:"hostname"`
-	Port string `flag:"p" default:"80" usage:"port"`
+    Print bool `flag:"p" default:"true" usage:"print result"`
 
-	Num   int     `flag:"n"`
-	Ratio float64 `default:"3.14159"`
-
-	Tcp bool `flag:"t" usage:"use tcp"`
-	Udp bool `flag:"u" usage:"use udp"`
-
-	Names []string `flag:"nm" default:"alice,bob" usage:"names"`
-	Index []int    `flag:"i" default:"1,2,3"`
+    // subcommands are defined by *struct{...}
+    Add *struct {
+        N1 int `default:"0"`
+        N2 int
+    } `flag:"add" usage:"n1+n2"`
+    Sub *struct {
+        N1 int
+        N2 int
+    } `flag:"sub" usage:"n1-n2"`
+    Mul *struct {
+        N1 int
+        N2 int
+    } `flag:"mul" usage:"n1*n2"`
+    Div *struct {
+        N1 float64
+        N2 float64
+    } // leave Div with no tags
 }
 
 func main() {
-	var op options // init a empty argument struct
+    var op options // init a empty argument struct
 
-	// build CLI parser with checkArgumentValidity checker
-	// checkArgumentValidity is optional
-	scli.Build(&op, checkArgumentValidity).Parse()
-	fmt.Printf("parse command line\n%+v\n", op)
+    parser := scli.BuildParser(&op)
+    // if Parse() error, program exits
+    // after this, op == op2
+    op = parser.Parse()
 
-	// you can also parse []string
-	scli.Build(&op).ParseArgs(strings.Split(
-		"-h host.com -n 70 -i 1,3,5 -t -nm cindy,david", " ",
-	))
-	fmt.Printf("parse []string\n%+v\n", op)
+    if op.Add != nil {
+        printIfTrue(op.Print, op.Add.N1+op.Add.N2)
+    } else if op.Sub != nil {
+        printIfTrue(op.Print, op.Sub.N1-op.Sub.N2)
+    } else if op.Mul != nil {
+        printIfTrue(op.Print, op.Mul.N1*op.Mul.N2)
+    } else if op.Div != nil {
+        printIfTrue(op.Print, op.Div.N1/op.Div.N2)
+    } else {
+        fmt.Println("exactly one subcommand should be given")
+    }
+
+    // parseArg can parse from []string instead of from CLI
+    parser.ParseArg(strings.Split("-p add -N1 3 -N2 4", " "))
 }
 
-// define a post parse checker, return error if none of tcp or udp is enabled,
-// Parse() will exit and print usage, ParseArgs() will return this error
-func checkArgumentValidity(v *options) error {
-	if v.Tcp == v.Udp {
-		return errors.New("exactly one of tcp or udp must be enabled")
-	}
-	return nil
+func printIfTrue(p bool, v any) {
+    if p {
+        fmt.Println(v)
+    }
 }
 ```
 
-Run `./main --help`
+Run `go run example/simple/main.go --help`
 ```
-Usage of ./example:
-  -Ratio float
-         (default 3.14159)
-  -h string
-        hostname
-  -i value
-         []int, input by int[,int]... (default 1,2,3)
-  -n int
-    
-  -nm value
-        names []string, input by string[,string]... (default alice,bob)
-  -p string
-        port (default "80")
-  -t    use tcp
-  -u    use udp
+Usage: /tmp/go-build2692279630/b001/exe/main [OPTIONS] [COMMAND]
+
+Commands:
+    Div
+    add
+        n1+n2
+    mul
+        n1*n2
+    sub
+        n1-n2
+Run `/tmp/go-build2692279630/b001/exe/main [COMMAND] -help` to see command help message
+
+Options:
+    -help, --help
+        show this help message
+    --p ([print result] true) --/p ([print result] false)
+        [default: true]
 ```
 
 ## Notes for `panic`
 To parse arguments, there are 2 stages.
-1. `Build(*Arg) error)` to build a parser
-2. `Parse()`, `ParseArgs(..)`to parse arguments
+1. `BuildParser(*struct{...}) error)` to build a parser
+2. `Parse()`, `ParseArgs(...)`to parse arguments
 
-Stage 1 is like compile a `struct{..}` to `parser`, `Build` will check
-struct field's type and tags, if error found in type and tags,
-`Build` panics and tells the detailed error. `Build` is considered
-as compile time. At Stage 2, `ParseArgs` never panics, if parse
-failed, error is returned. `Parse`, used as the root parser of
-command arguments, if failed, program exits. `Parse`, `ParseArgs` is considered
-runtime.
+`BuildParser` will check struct field's type and tags,
+if error found in type and tags, `BuildParser` panics and tells
+the detailed error. You can think `BuildParser` compile `struct{...}` to
+correponding `Parser`, and compile may error.
 
+`Parse()`, `ParseArgs(...)` parse input arguments from CLI or `[]string`,
+they never panics, if parse fails, error is returned.
+
+`Parse()` do a bit more than `ParseArgs(...)`. If `Parse()` meets error,
+`Parse()` ends program, show parse errors and program USAGE.
+
+If a custom type `Custom` is in arguments struct, and the custom type's
+`Custom.FromString(string)` method may `panic`.
+If `FromString` panic, `Parse()` and `ParseArg()` will `panic`.
