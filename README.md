@@ -1,16 +1,35 @@
 # scli
 Defining an argument struct and calling `scli` is all you need to create a CLI application.
 
-`scli` supports `int`, `float64`, `bool`, `string` or any type implemented `scli.Parse`
-arguments and arbitrary layer of subcommands with these types of arguments.
+# Feature
 
-Any argument/subcommand `scli` supports can have a configurable CLI argument name, default value and
-usage message.
+## Any type of argument
+Supports arguments of type `int`, `float64`, `bool`, `string` or any type
+implemented `scli.Parse`.
 
-`scli` can directly parse arguments from CLI, or from `string`. You can test your configuration
-by parse `string`.
+For example, if `Addr {string; string}` struct defines a `(*Addr).FromString(string) error`
+method parsing `127.0.0.1:80` to `Addr {"127.0.0.1", "80"}`, CLI can have a type `Addr`
+argument.
+- `./my-program -addr 127.0.0.1:80`
 
-## Usage
+## Arbitrary nested layer of subcommands
+Supports defining CLI program like below, where `remote`, `local` are layer 1 subcommands,
+`add`, `remove` are layer 2 subcommands.
+- `./my-program remote add -name Alice`
+- `./my-program local add -name Bob`
+- `./my-program remote remove -name Cindy`
+
+Any argument/subcommand can have a configurable CLI argument name and usage message.
+
+## Default values
+Supports default value for any type of arguments by simply add a `default` tag, including custom types.
+- ```
+  type Arg struct {
+      addr Addr `default:"127.0.0.1:80"`
+  }
+  ```
+
+# Example
 ```go
 // this is same as example/simple/main.go
 package main
