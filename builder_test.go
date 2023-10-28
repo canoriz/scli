@@ -164,24 +164,34 @@ func TestParseError(t *testing.T) {
 
 func TestParseOk(t *testing.T) {
 	var a Arg
-	input := "-sz 14 -big qwerty -vsz 3 -s 18:13 add -n a -/b high -n af"
-	expected := Arg{
-		Size:   14,
-		VSize:  3,
-		Big:    "QWERTY",
-		Source: addr{ip: "18", port: "13"},
-		Add:    &add{Name: "a", B: false, High: &high{Name: "af"}},
+	{
+		input := "-sz 14 -big qwerty -vsz 3 -s 18:13 add -n a -/b high -n af"
+		expected := Arg{
+			Size:   14,
+			VSize:  3,
+			Big:    "QWERTY",
+			Source: addr{ip: "18", port: "13"},
+			Add:    &add{Name: "a", B: false, High: &high{Name: "af"}},
+		}
+		parser := BuildParser(&a)
+		r, err := parser.ParseArg(strings.Split(input, " "))
+		if err != nil {
+			t.Error(err)
+		}
+		if !reflect.DeepEqual(expected, a) {
+			t.Errorf("expected: %+v, get %+v", expected, r)
+		}
+		if parser.Help() == "" {
+			t.Log(parser.Help())
+			t.Error("should have help")
+		}
 	}
-	parser := BuildParser(&a)
-	r, err := parser.ParseArg(strings.Split(input, " "))
-	if err != nil {
-		t.Error(err)
-	}
-	if !reflect.DeepEqual(expected, a) {
-		t.Errorf("expected: %+v, get %+v", expected, r)
-	}
-	if parser.Help() == "" {
-		t.Log(parser.Help())
-		t.Error("should have help")
+
+	{
+		parser := BuildParser(&a)
+		_, err := parser.ParseArg(strings.Split("--help", " "))
+		if !errors.Is(err, ErrIsHelp) {
+			t.Fatalf("should be help, get %v", err)
+		}
 	}
 }
