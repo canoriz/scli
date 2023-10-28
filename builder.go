@@ -28,7 +28,8 @@ const ( // build time errors
 	errParseDefault   = `error parsing default value "%s" of field "%s", error: %w`
 	errHelpIsReserved = `"help" is a reserved word, please change option name of "%s"`
 	errNotImplParse   = "*T did not implement `Parse` interface, where T is type of field %s"
-	errNotStructPtr   = "*T must be *struct{...}, where T is type of field %s"
+	errNotStructPtr   = "*T must be *struct{...} or *T implemented `Parse`, " +
+		"where T is type of field %s"
 )
 
 const ( // runtime errors
@@ -40,12 +41,13 @@ const ( // runtime errors
 )
 
 type parseResult struct {
-	rv       reflect.Value
-	helpText string
+	rv        reflect.Value
+	isHelpCmd bool
+	helpText  string
 }
 
 func (p parseResult) IsHelp() bool {
-	return p.helpText != ""
+	return p.isHelpCmd
 }
 
 type parseFn func([]string) (parseResult, error)
@@ -69,8 +71,11 @@ func (p parser[T]) ParseArg(s []string) (zero T, err error) {
 func (p parser[T]) Parse() T {
 	r, e := p.parse(os.Args[1:])
 	if e != nil {
-		fmt.Fprintln(os.Stderr, e)
-		os.Exit(-2)
+		fmt.Fprintf(os.Stderr, "error: %v\n", e)
+		fmt.Println()
+		fmt.Println("The usage is:")
+		fmt.Print(r.helpText)
+		os.Exit(2)
 	}
 	if r.IsHelp() {
 		fmt.Print(r.helpText)
@@ -84,8 +89,8 @@ func (p parser[T]) Help() string {
 }
 
 func BuildParser[T any](u *T) Parser[T] {
-	parse, help := checkTopAndBuildParseFn(u, os.Args[0])
-	return parser[T]{parse, help}
+	parse, topHelp := checkTopAndBuildParseFn(u, os.Args[0])
+	return parser[T]{parse, topHelp}
 }
 
 func checkTopAndBuildParseFn(u any, execName string) (parseFn, string) {
@@ -160,20 +165,21 @@ func buildParseFn(fieldChain string, viewNameChain string, u reflect.Value) (p p
 
 	parse := func(input []string) (parseResult, error) {
 		encounter := make(map[string]bool)
-		var ret parseResult
+		parseRes := parseResult{
+			helpText: makeUsageText(viewNameChain, arg, command),
+		}
 		for len(input) > 0 {
 			first, rest := input[0], input[1:]
 			switch {
 			case strings.HasPrefix(first, "-"):
 				realOption := strings.Trim(first, "-/")
 				if realOption == "help" {
-					return parseResult{
-						helpText: makeUsageText(viewNameChain, arg, command),
-					}, nil
+					parseRes.isHelpCmd = true
+					return parseRes, nil
 				}
 				t, ok := arg[realOption]
 				if !ok {
-					return parseResult{}, fmt.Errorf(
+					return parseRes, fmt.Errorf(
 						errNoArgument,
 						realOption,
 						viewNameChain,
@@ -188,7 +194,7 @@ func buildParseFn(fieldChain string, viewNameChain string, u reflect.Value) (p p
 					)
 				} else {
 					if len(input) < t.consumeLen {
-						return parseResult{}, fmt.Errorf(
+						return parseRes, fmt.Errorf(
 							errNoValue, realOption, viewNameChain,
 						)
 					}
@@ -205,12 +211,11 @@ func buildParseFn(fieldChain string, viewNameChain string, u reflect.Value) (p p
 			default: // subcommand
 				t, ok := command[first]
 				if !ok {
-					return parseResult{},
-						fmt.Errorf(errNoSubcommand, first, viewNameChain)
+					return parseRes, fmt.Errorf(errNoSubcommand, first, viewNameChain)
 				}
 				r, err := t.parseFn(rest)
 				if err != nil {
-					return parseResult{}, err
+					return r, err
 				}
 				if r.IsHelp() {
 					return r, nil
@@ -221,7 +226,7 @@ func buildParseFn(fieldChain string, viewNameChain string, u reflect.Value) (p p
 		}
 
 		for argName, info := range arg {
-			if _, ok := encounter[argName]; !ok {
+			if _, argFound := encounter[argName]; !argFound {
 				if info.defaultVal != "" {
 					r, err := info.parseFn([]string{info.defaultVal})
 					if err != nil {
@@ -232,7 +237,7 @@ func buildParseFn(fieldChain string, viewNameChain string, u reflect.Value) (p p
 					}
 					argStructPtr.FieldByName(info.fullName).Set(r.rv)
 				} else {
-					return parseResult{}, fmt.Errorf(
+					return parseRes, fmt.Errorf(
 						errArgNotFound,
 						argName,
 						viewNameChain,
@@ -240,8 +245,8 @@ func buildParseFn(fieldChain string, viewNameChain string, u reflect.Value) (p p
 				}
 			}
 		}
-		ret.rv = argStructPtr
-		return ret, nil
+		parseRes.rv = argStructPtr
+		return parseRes, nil
 	}
 	return parse, makeUsageText(viewNameChain, arg, command)
 }
@@ -421,17 +426,15 @@ func buildArgAndCommandList(
 				}
 			case reflect.Pointer:
 				// should be *struct{...}
-				// valField is reflect.Value of *struct{}
-				structType := valField.Type().Elem() // struct{}
-				// ptrStruct := reflect.New(structType) // *struct{...}
-				if structType.Kind() != reflect.Struct {
+				fieldType := valField.Type().Elem() // reflect.Type struct{...}
+				if fieldType.Kind() != reflect.Struct {
 					return arg, command, fmt.Errorf(
 						errNotStructPtr,
 						fmt.Sprintf("%s.%s", fieldChain, defName),
 					)
 				}
 
-				instance := reflect.New(structType)
+				instance := reflect.New(fieldType) // reflect.Value *struct{...}
 				parseFn, usageText := buildParseFn(
 					fmt.Sprintf("%s.%s", fieldChain, defName),
 					fmt.Sprintf("%s %s", viewNameChain, flagName),

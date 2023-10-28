@@ -64,6 +64,15 @@ var (
 			}
 			BuildParser(&s0)
 		}}, {
+		"not struct pointer",
+		func() {
+			type a []string
+			var s0 struct {
+				v a
+				u *int
+			}
+			BuildParser(&s0)
+		}}, {
 		"custom field wrong default",
 		func() {
 			var s0 struct {
