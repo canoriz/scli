@@ -106,7 +106,7 @@ To parse arguments, there are 2 stages.
 `BuildParser` will check struct field's type and tags,
 if error found in type and tags, `BuildParser` panics and tells
 the detailed error. You can think `BuildParser` compile `struct{...}` to
-correponding `Parser`, and compile may error.
+corresponding `Parser`, and compile may error.
 
 `Parse()`, `ParseArgs(...)` parse input arguments from CLI or `[]string`,
 they never panics, if parse fails, error is returned.
