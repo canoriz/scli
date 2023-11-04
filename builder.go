@@ -40,6 +40,13 @@ const ( // runtime errors
 	errArgNotFound  = `argument "--%s" is required in "%s" but not provided`
 )
 
+func maxInt(a, b int) int {
+	if a < b {
+		return b
+	}
+	return a
+}
+
 type parseResult struct {
 	rv        reflect.Value
 	isHelpCmd bool
@@ -280,62 +287,104 @@ func makeUsageText(viewNameChain string, arg map[string]argInfo, command map[str
 		}
 		return ss
 	}
-	argList := []string{"-help, --help", shiftFour("show this help message")}
-	for _, a := range sortMap(arg) {
-		info := a.val
-		argName := a.key
-		argUsage := func() string {
-			if info.ty == boolArg {
+	appendSpacesToLength := func(s string, toLength int) string {
+		needSpace := toLength - len(s)
+		for i := 0; i < needSpace; i++ {
+			s += " "
+		}
+		return s
+	}
+
+	const helpArg = "-help, --help"
+	const boolArgText = "--%s, --/%s"
+	argList := []string{fmt.Sprintf("%s  %s", helpArg, "print this message")}
+	{
+		maxArgLength := len(helpArg)
+		for _, a := range sortMap(arg) {
+			maxArgLength = maxInt(
+				maxArgLength,
+				func() int {
+					if a.val.ty == boolArg {
+						return len(fmt.Sprintf(boolArgText, a.key, a.key))
+					}
+					return len(a.key)
+				}(),
+			)
+		}
+		for _, a := range sortMap(arg) {
+			info := a.val
+			argName := a.key
+			argUsage := func() string {
+				unifiedUsage := argName
 				if info.usage != "" {
+					unifiedUsage = info.usage
+				}
+				if info.ty == boolArg {
 					return fmt.Sprintf(
-						"--%s ([%s] true) --/%s ([%s] false)",
-						argName, info.usage,
-						argName, info.usage,
+						"%s  %s",
+						appendSpacesToLength(
+							fmt.Sprintf(boolArgText, argName, argName),
+							maxArgLength,
+						),
+						fmt.Sprintf("set [%s] to true / false",
+							unifiedUsage,
+						),
 					)
 				}
-				return fmt.Sprintf(
-					"--%s (true) --/%s (false)",
-					argName, argName,
+				return fmt.Sprintf("--%s <%s>", argName, unifiedUsage)
+			}()
+
+			if info.defaultVal != "" {
+				if info.ty == boolArg {
+					argUsage = appendSpacesToLength(argUsage, maxArgLength)
+				}
+				argUsage = fmt.Sprintf(
+					"%s  %s",
+					appendSpacesToLength(argUsage, maxArgLength),
+					fmt.Sprintf("[default: %s]", info.defaultVal),
 				)
 			}
-			if info.usage != "" {
-				return fmt.Sprintf(
-					"--%s <%s>",
-					argName, info.usage,
-				)
-			}
-			return fmt.Sprintf(
-				"--%s <%s>",
-				argName, argName,
-			)
-		}()
-		argList = append(argList, argUsage)
-		if info.defaultVal != "" {
-			argList = append(
-				argList,
-				shiftFour(fmt.Sprintf("[default: %s]", info.defaultVal)),
-			)
+			argList = append(argList, argUsage)
 		}
 	}
+
 	cmdList := []string{}
-	for _, c := range sortMap(command) {
-		cmd := c.key
-		info := c.val
-		cmdList = append(cmdList, cmd)
-		if info.usage != "" {
-			cmdList = append(cmdList, shiftFour(info.usage))
+	{
+		maxCmdLength := 0
+		for _, c := range sortMap(command) {
+			maxCmdLength = maxInt(maxCmdLength, len(c.key))
+		}
+		for _, c := range sortMap(command) {
+			cmd := c.key
+			info := c.val
+			cmdUsage := cmd
+			if info.usage != "" {
+				cmdUsage = fmt.Sprintf(
+					"%s  %s",
+					appendSpacesToLength(cmd, maxCmdLength),
+					info.usage,
+				)
+			}
+			cmdList = append(cmdList, cmdUsage)
 		}
 	}
-	usage := fmt.Sprintf("Usage: %s [OPTIONS]\n\n", viewNameChain)
+
+	usage := fmt.Sprintf("Usage: %s [OPTIONS]\n", viewNameChain)
 	if len(cmdList) > 0 {
-		usage = fmt.Sprintf("Usage: %s [OPTIONS] [COMMAND]\n\n", viewNameChain)
+		usage = fmt.Sprintf("Usage: %s [OPTIONS] [COMMAND]\n", viewNameChain)
 		usage += fmt.Sprintf(
-			"Commands:\n%s\n", strings.Join(fmap(cmdList, shiftFour), "\n"),
+			"\nCommands:\n%s\n", strings.Join(fmap(cmdList, shiftFour), "\n"),
 		)
-		usage += fmt.Sprintf("Run `%s [COMMAND] -help` to see command help message\n\n", viewNameChain)
 	}
-	// arg always have --help, not empty
-	return usage + fmt.Sprintf("Options:\n%s\n", strings.Join(fmap(argList, shiftFour), "\n"))
+	// arg always have --help, thus not empty
+	usage += fmt.Sprintf("\nOptions:\n%s\n", strings.Join(fmap(argList, shiftFour), "\n"))
+	if len(cmdList) > 0 {
+		usage += fmt.Sprintf(
+			"\nRun `%s [COMMAND] -help` to print the help message of COMMAND\n\n",
+			viewNameChain,
+		)
+	}
+	return usage
 }
 
 func buildArgAndCommandList(
