@@ -98,23 +98,19 @@ func printIfTrue(p bool, v any) {
 
 Run `go run example/simple/main.go --help`
 ```
-Usage: /tmp/go-build2692279630/b001/exe/main [OPTIONS] [COMMAND]
+Usage: ./simple [OPTIONS] [COMMAND]
 
 Commands:
     Div
-    add
-        n1+n2
-    mul
-        n1*n2
-    sub
-        n1-n2
-Run `/tmp/go-build2692279630/b001/exe/main [COMMAND] -help` to see command help message
+    add  n1+n2
+    mul  n1*n2
+    sub  n1-n2
 
 Options:
-    -help, --help
-        show this help message
-    --p ([print result] true) --/p ([print result] false)
-        [default: true]
+    -help, --help  print this message
+    --p, --/p      set [print result] to true / false  [default: true]
+
+Run `./simple [COMMAND] -help` to print the help message of COMMAND
 ```
 
 ## Notes for `panic`
