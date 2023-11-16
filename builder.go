@@ -296,21 +296,35 @@ func makeUsageText(viewNameChain string, arg map[string]argInfo, command map[str
 	}
 
 	const helpArg = "-help, --help"
-	const boolArgText = "--%s, --/%s"
-	argList := []string{fmt.Sprintf("%s  %s", helpArg, "print this message")}
+	const boolArgFmt = "--%s, --/%s"
+	const generalArgFmt = "--%s <%s>"
+	argList := []string{}
 	{
 		maxArgLength := len(helpArg)
 		for _, a := range sortMap(arg) {
+			argName := a.key
+			argInfo := a.val
+			unifiedUsage := argName
+			if argInfo.usage != "" {
+				unifiedUsage = a.val.usage
+			}
 			maxArgLength = maxInt(
 				maxArgLength,
 				func() int {
 					if a.val.ty == boolArg {
-						return len(fmt.Sprintf(boolArgText, a.key, a.key))
+						return len(fmt.Sprintf(boolArgFmt, argName, argName))
 					}
-					return len(a.key)
+					return len(fmt.Sprintf(generalArgFmt, argName, unifiedUsage))
 				}(),
 			)
 		}
+		argList = append(
+			argList,
+			fmt.Sprintf(
+				"%s  %s",
+				appendSpacesToLength(helpArg, maxArgLength), "print this message",
+			),
+		)
 		for _, a := range sortMap(arg) {
 			info := a.val
 			argName := a.key
@@ -323,7 +337,7 @@ func makeUsageText(viewNameChain string, arg map[string]argInfo, command map[str
 					return fmt.Sprintf(
 						"%s  %s",
 						appendSpacesToLength(
-							fmt.Sprintf(boolArgText, argName, argName),
+							fmt.Sprintf(boolArgFmt, argName, argName),
 							maxArgLength,
 						),
 						fmt.Sprintf("set [%s] to true / false",
@@ -331,7 +345,7 @@ func makeUsageText(viewNameChain string, arg map[string]argInfo, command map[str
 						),
 					)
 				}
-				return fmt.Sprintf("--%s <%s>", argName, unifiedUsage)
+				return fmt.Sprintf(generalArgFmt, argName, unifiedUsage)
 			}()
 
 			if info.defaultVal != "" {
