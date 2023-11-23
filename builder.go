@@ -143,6 +143,7 @@ type argInfo struct {
 	consumeLen int
 	ty         kwType
 	defaultVal string
+	hasDefault bool
 	usage      string
 }
 
@@ -234,7 +235,7 @@ func buildParseFn(fieldChain string, viewNameChain string, u reflect.Value) (p p
 
 		for argName, info := range arg {
 			if _, argFound := encounter[argName]; !argFound {
-				if info.defaultVal != "" {
+				if info.hasDefault {
 					r, err := info.parseFn([]string{info.defaultVal})
 					if err != nil {
 						panic(
@@ -348,7 +349,7 @@ func makeUsageText(viewNameChain string, arg map[string]argInfo, command map[str
 				return fmt.Sprintf(generalArgFmt, argName, unifiedUsage)
 			}()
 
-			if info.defaultVal != "" {
+			if info.hasDefault {
 				if info.ty == boolArg {
 					argUsage = appendSpacesToLength(argUsage, maxArgLength)
 				}
@@ -416,7 +417,7 @@ func buildArgAndCommandList(
 		if flagName == "" {
 			flagName = defName
 		}
-		defaultVal := defField.Tag.Get("default")
+		defaultVal, hasDefault := defField.Tag.Lookup("default")
 		usage := defField.Tag.Get("usage")
 
 		valField := argStructPtr.Field(i)
@@ -428,6 +429,7 @@ func buildArgAndCommandList(
 				argLen,
 				valArg,
 				defaultVal,
+				hasDefault,
 				usage,
 			}
 		} else {
@@ -443,6 +445,7 @@ func buildArgAndCommandList(
 					argLen,
 					valArg,
 					defaultVal,
+					hasDefault,
 					usage,
 				}
 			case reflect.Bool:
@@ -457,6 +460,7 @@ func buildArgAndCommandList(
 					boolArgLen,
 					boolArg,
 					defaultVal,
+					hasDefault,
 					usage,
 				}
 			case reflect.Int:
@@ -471,6 +475,7 @@ func buildArgAndCommandList(
 					argLen,
 					valArg,
 					defaultVal,
+					hasDefault,
 					usage,
 				}
 			case reflect.Float64:
@@ -485,6 +490,7 @@ func buildArgAndCommandList(
 					argLen,
 					valArg,
 					defaultVal,
+					hasDefault,
 					usage,
 				}
 			case reflect.Pointer:

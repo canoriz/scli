@@ -138,6 +138,7 @@ type Arg struct {
 	Delete *struct {
 		Name int `flag:"n" usage:"delete file"`
 	}
+	DefaultEmptyStr string `flag:"str" default:"" usage:"some string"`
 }
 
 type add struct {
@@ -172,6 +173,7 @@ func TestParseOk(t *testing.T) {
 			Big:    "QWERTY",
 			Source: addr{ip: "18", port: "13"},
 			Add:    &add{Name: "a", B: false, High: &high{Name: "af"}},
+			DefaultEmptyStr: "",
 		}
 		parser := BuildParser(&a)
 		r, err := parser.ParseArg(strings.Split(input, " "))
