@@ -350,13 +350,19 @@ func makeUsageText(viewNameChain string, arg map[string]argInfo, command map[str
 			}()
 
 			if info.hasDefault {
-				if info.ty == boolArg {
-					argUsage = appendSpacesToLength(argUsage, maxArgLength)
-				}
+				// if info.ty == boolArg {
+				// 	argUsage = appendSpacesToLength(argUsage, maxArgLength)
+				// }
+				defaultText := func() string {
+					if info.ty == boolArg {
+						return fmt.Sprintf(`[default: %s]`, info.defaultVal)
+					}
+					return fmt.Sprintf(`[default: "%s"]`, info.defaultVal)
+				}()
 				argUsage = fmt.Sprintf(
 					"%s  %s",
 					appendSpacesToLength(argUsage, maxArgLength),
-					fmt.Sprintf("[default: %s]", info.defaultVal),
+					defaultText,
 				)
 			}
 			argList = append(argList, argUsage)
