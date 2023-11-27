@@ -210,7 +210,7 @@ func buildParseFn(fieldChain string, viewNameChain string, u reflect.Value) (p p
 					r, err := t.parseFn(val)
 					if err != nil {
 						return parseResult{}, fmt.Errorf(
-							errParseArg, first, strings.Join(val, ""), err,
+							errParseArg, realOption, strings.Join(val, ""), err,
 						)
 					}
 					argStructPtr.FieldByName(t.fullName).Set(r.rv)
