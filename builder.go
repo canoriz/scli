@@ -27,9 +27,9 @@ var (
 const ( // build time errors
 	errParseDefault   = `error parsing default value "%s" of field "%s", error: %w`
 	errHelpIsReserved = `"help" is a reserved word, please change option name of "%s"`
-	errNotImplParse   = "*T did not implement `Parse` interface, where T is type of field %s"
-	errNotStructPtr   = "*T must be *struct{...} or *T implemented `Parse`, " +
-		"where T is type of field %s"
+	errNotImplParse   = "*%s did not implement `Parse` interface, at field %s"
+	errNotStructPtr   = "type %v of field %s must be *struct{...} to represent a subcommand, " +
+		"or type `Parse` to represent a custom type"
 )
 
 const ( // runtime errors
@@ -505,6 +505,7 @@ func buildArgAndCommandList(
 				if fieldType.Kind() != reflect.Struct {
 					return arg, command, fmt.Errorf(
 						errNotStructPtr,
+						valField.Type(),
 						fmt.Sprintf("%s.%s", fieldChain, defName),
 					)
 				}
@@ -525,6 +526,7 @@ func buildArgAndCommandList(
 			default:
 				return arg, command, fmt.Errorf(
 					errNotImplParse,
+					valField.Type(),
 					fmt.Sprintf("%s.%s", fieldChain, defName),
 				)
 			}
@@ -535,7 +537,7 @@ func buildArgAndCommandList(
 
 func customParser(r reflect.Value) (p parseFn, err error) {
 	if !r.CanAddr() {
-		return p, errors.New("can not addr")
+		return p, fmt.Errorf("can not addr type %v", r.Type())
 	}
 	if implParse, ok := r.Addr().Interface().(Parse); ok {
 		return func(s []string) (parseResult, error) {
