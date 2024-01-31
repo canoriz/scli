@@ -58,9 +58,9 @@ var (
 		}}, {
 		"custom field not impl Parse",
 		func() {
-			type a []string
+			type a []int8
 			var s0 struct {
-				v a
+				V a
 			}
 			BuildParser(&s0)
 		}}, {
@@ -68,15 +68,15 @@ var (
 		func() {
 			type a []string
 			var s0 struct {
-				v a
-				u *int
+				V a
+				U *int
 			}
 			BuildParser(&s0)
 		}}, {
 		"custom field wrong default",
 		func() {
 			var s0 struct {
-				d addr `default:"133"`
+				D addr `default:"133"`
 			}
 			BuildParser(&s0)
 		}}, {
@@ -84,6 +84,13 @@ var (
 		func() {
 			var s0 struct {
 				Float1 float64 `flag:"help"`
+			}
+			BuildParser(&s0)
+		}}, {
+		"slice did not implement Parse",
+		func() {
+			var s0 struct {
+				D []int8
 			}
 			BuildParser(&s0)
 		}},
@@ -113,6 +120,9 @@ var (
 	}, {
 		"parse error",
 		"-vsz a",
+	}, {
+		"slice parse error",
+		"-vsz 12 -addr-list 14$3",
 	}}
 )
 
@@ -139,6 +149,7 @@ type Arg struct {
 		Name int `flag:"n" usage:"delete file"`
 	}
 	DefaultEmptyStr string `flag:"str" default:"" usage:"some string"`
+	AddrList        []addr `flag:"addr-list" default:"" usage:"address list"`
 }
 
 type add struct {
@@ -166,14 +177,20 @@ func TestParseError(t *testing.T) {
 func TestParseOk(t *testing.T) {
 	var a Arg
 	{
-		input := "-sz 14 -big qwerty -vsz 3 -s 18:13 add -n a -/b high -n af"
+		input := "-sz 14 -big qwerty -vsz 3 -s " +
+			"18:13 -addr-list 18:13,14:12,15:11 add -n a -/b high -n af"
 		expected := Arg{
-			Size:   14,
-			VSize:  3,
-			Big:    "QWERTY",
-			Source: addr{ip: "18", port: "13"},
-			Add:    &add{Name: "a", B: false, High: &high{Name: "af"}},
+			Size:            14,
+			VSize:           3,
+			Big:             "QWERTY",
+			Source:          addr{ip: "18", port: "13"},
+			Add:             &add{Name: "a", B: false, High: &high{Name: "af"}},
 			DefaultEmptyStr: "",
+			AddrList: []addr{
+				{"18", "13"},
+				{"14", "12"},
+				{"15", "11"},
+			},
 		}
 		parser := BuildParser(&a)
 		r, err := parser.ParseArg(strings.Split(input, " "))

@@ -440,13 +440,83 @@ func buildArgAndCommandList(
 			}
 		} else {
 			switch valField.Kind() {
-			case reflect.String:
+			case reflect.Slice:
+				ptrToElemType := reflect.New(valField.Type().Elem())
+				parseElemFn, err := func() (func(reflect.Value) parseFn, error) {
+					if _, ok := ptrToElemType.Interface().(Parse); ok {
+						return func(r reflect.Value) parseFn {
+							return func(s []string) (parseResult, error) {
+								if !r.CanAddr() {
+									// TODO:
+									return parseResult{}, errors.New("cannot addr")
+								}
+								rImplParse := r.Addr().Interface().(Parse)
+								e := rImplParse.FromString(strings.Join(s, ""))
+								return parseResult{
+									rv: r, // r will be updated by FromString
+								}, e
+							}
+						}, nil
+					} else {
+						switch ptrToElemType.Elem().Kind() {
+						case reflect.String:
+							return func(_ reflect.Value) parseFn {
+								return parseString
+							}, nil
+						case reflect.Bool:
+							return func(_ reflect.Value) parseFn {
+								return parseBool
+							}, nil
+						case reflect.Int:
+							return func(_ reflect.Value) parseFn {
+								return parseInt
+							}, nil
+						case reflect.Float64:
+							return func(_ reflect.Value) parseFn {
+								return parseFloat64
+							}, nil
+						default:
+							//TODO:
+							return nil, errors.New("inner elem type error")
+						}
+					}
+				}()
+				if err != nil {
+					return arg, command, err
+				}
 				arg[flagName] = argInfo{
 					func(s []string) (parseResult, error) {
-						return parseResult{
-							rv: reflect.ValueOf(strings.Join(s, "")),
-						}, nil
+						str := strings.Join(s, "")
+						if str == "" {
+							return parseResult{
+								rv: reflect.MakeSlice(valField.Type(), 0, 0),
+							}, nil
+						}
+						sliceStrs := strings.Split(str, ",")
+						resultSlice := reflect.MakeSlice(
+							valField.Type(), len(sliceStrs), len(sliceStrs),
+						)
+						for i, si := range sliceStrs {
+							newElem := reflect.New(ptrToElemType.Type().Elem()).Elem()
+							a, err := parseElemFn(newElem)([]string{si})
+							if err != nil {
+								//TODO:
+								return parseResult{}, err
+							}
+							resultSlice.Index(i).Set(a.rv)
+						}
+						return parseResult{rv: resultSlice}, nil
 					},
+					defName,
+					argLen,
+					valArg,
+					defaultVal,
+					hasDefault,
+					usage,
+				}
+			case reflect.String:
+				arg[flagName] = argInfo{
+					parseString,
 					defName,
 					argLen,
 					valArg,
@@ -456,12 +526,7 @@ func buildArgAndCommandList(
 				}
 			case reflect.Bool:
 				arg[flagName] = argInfo{
-					func(s []string) (parseResult, error) {
-						b, e := strconv.ParseBool(strings.Join(s, ""))
-						return parseResult{
-							rv: reflect.ValueOf(b),
-						}, e
-					},
+					parseBool,
 					defName,
 					boolArgLen,
 					boolArg,
@@ -471,12 +536,7 @@ func buildArgAndCommandList(
 				}
 			case reflect.Int:
 				arg[flagName] = argInfo{
-					func(s []string) (parseResult, error) {
-						b, e := strconv.ParseInt(strings.Join(s, ""), 0, 64)
-						return parseResult{
-							rv: reflect.ValueOf(int(b)),
-						}, e
-					},
+					parseInt,
 					defName,
 					argLen,
 					valArg,
@@ -486,12 +546,7 @@ func buildArgAndCommandList(
 				}
 			case reflect.Float64:
 				arg[flagName] = argInfo{
-					func(s []string) (parseResult, error) {
-						b, e := strconv.ParseFloat(strings.Join(s, ""), 64)
-						return parseResult{
-							rv: reflect.ValueOf(b),
-						}, e
-					},
+					parseFloat64,
 					defName,
 					argLen,
 					valArg,
@@ -573,4 +628,28 @@ func validateArgAndCommand(
 		}
 	}
 	return nil
+}
+
+func parseBool(s []string) (parseResult, error) {
+	b, e := strconv.ParseBool(strings.Join(s, ""))
+	return parseResult{
+		rv: reflect.ValueOf(b),
+	}, e
+}
+func parseString(s []string) (parseResult, error) {
+	return parseResult{
+		rv: reflect.ValueOf(strings.Join(s, "")),
+	}, nil
+}
+func parseInt(s []string) (parseResult, error) {
+	b, e := strconv.ParseInt(strings.Join(s, ""), 0, 64)
+	return parseResult{
+		rv: reflect.ValueOf(int(b)),
+	}, e
+}
+func parseFloat64(s []string) (parseResult, error) {
+	b, e := strconv.ParseFloat(strings.Join(s, ""), 64)
+	return parseResult{
+		rv: reflect.ValueOf(b),
+	}, e
 }
