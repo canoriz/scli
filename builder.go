@@ -350,9 +350,6 @@ func makeUsageText(viewNameChain string, arg map[string]argInfo, command map[str
 			}()
 
 			if info.hasDefault {
-				// if info.ty == boolArg {
-				// 	argUsage = appendSpacesToLength(argUsage, maxArgLength)
-				// }
 				defaultText := func() string {
 					if info.ty == boolArg {
 						return fmt.Sprintf(`[default: %s]`, info.defaultVal)
@@ -427,7 +424,7 @@ func buildArgAndCommandList(
 		usage := defField.Tag.Get("usage")
 
 		valField := argStructPtr.Field(i)
-		p, e := customParser(valField)
+		p, e := hasCustomParser(valField)
 		if e == nil { // has implemented Parse
 			arg[flagName] = argInfo{
 				p,
@@ -441,24 +438,12 @@ func buildArgAndCommandList(
 		} else {
 			switch valField.Kind() {
 			case reflect.Slice:
-				ptrToElemType := reflect.New(valField.Type().Elem())
+				ptrToElem := reflect.New(valField.Type().Elem())
 				parseElemFn, err := func() (func(reflect.Value) parseFn, error) {
-					if _, ok := ptrToElemType.Interface().(Parse); ok {
-						return func(r reflect.Value) parseFn {
-							return func(s []string) (parseResult, error) {
-								if !r.CanAddr() {
-									// TODO:
-									return parseResult{}, errors.New("cannot addr")
-								}
-								rImplParse := r.Addr().Interface().(Parse)
-								e := rImplParse.FromString(strings.Join(s, ""))
-								return parseResult{
-									rv: r, // r will be updated by FromString
-								}, e
-							}
-						}, nil
+					if _, ok := ptrToElem.Interface().(Parse); ok {
+						return customParserFor, nil
 					} else {
-						switch ptrToElemType.Elem().Kind() {
+						switch ptrToElem.Elem().Kind() {
 						case reflect.String:
 							return func(_ reflect.Value) parseFn {
 								return parseString
@@ -476,13 +461,16 @@ func buildArgAndCommandList(
 								return parseFloat64
 							}, nil
 						default:
-							//TODO:
-							return nil, errors.New("inner elem type error")
+							return nil, errors.New("[]T, *T is not Parse")
 						}
 					}
 				}()
 				if err != nil {
-					return arg, command, err
+					return arg, command, fmt.Errorf(
+						errNotImplParse,
+						ptrToElem.Type().Elem(),
+						fmt.Sprintf("%s.%s", fieldChain, defName),
+					)
 				}
 				arg[flagName] = argInfo{
 					func(s []string) (parseResult, error) {
@@ -492,18 +480,17 @@ func buildArgAndCommandList(
 								rv: reflect.MakeSlice(valField.Type(), 0, 0),
 							}, nil
 						}
-						sliceStrs := strings.Split(str, ",")
+						strSlice := strings.Split(str, ",")
 						resultSlice := reflect.MakeSlice(
-							valField.Type(), len(sliceStrs), len(sliceStrs),
+							valField.Type(), len(strSlice), len(strSlice),
 						)
-						for i, si := range sliceStrs {
-							newElem := reflect.New(ptrToElemType.Type().Elem()).Elem()
-							a, err := parseElemFn(newElem)([]string{si})
+						for i, si := range strSlice {
+							newElem := reflect.New(ptrToElem.Type().Elem()).Elem()
+							res, err := parseElemFn(newElem)([]string{si})
 							if err != nil {
-								//TODO:
 								return parseResult{}, err
 							}
-							resultSlice.Index(i).Set(a.rv)
+							resultSlice.Index(i).Set(res.rv)
 						}
 						return parseResult{rv: resultSlice}, nil
 					},
@@ -590,19 +577,33 @@ func buildArgAndCommandList(
 	return arg, command, nil
 }
 
-func customParser(r reflect.Value) (p parseFn, err error) {
+// customParser return parseFn for this specific r: reflect.Value
+func hasCustomParser(r reflect.Value) (
+	customParser parseFn, err error,
+) {
 	if !r.CanAddr() {
-		return p, fmt.Errorf("can not addr type %v", r.Type())
+		return customParser,
+			fmt.Errorf("can not addr type %v", r.Type())
 	}
-	if implParse, ok := r.Addr().Interface().(Parse); ok {
-		return func(s []string) (parseResult, error) {
-			e := implParse.FromString(strings.Join(s, ""))
-			return parseResult{
-				rv: r, // r will be updated by FromString
-			}, e
-		}, nil
+	if _, ok := r.Addr().Interface().(Parse); ok {
+		return customParserFor(r), nil
 	}
-	return p, errors.New("does not implement Parse")
+	return customParser,
+		errors.New("does not implement Parse")
+}
+
+// calling this function returns the specific function parse
+// and set the reflect.Value r by the Parse method defined for
+// type r. Caller MUST ensure r is *Parse.
+func customParserFor(r reflect.Value) parseFn {
+	return func(s []string) (parseResult, error) {
+		e := r.Addr().
+			Interface().(Parse).
+			FromString(strings.Join(s, ""))
+		return parseResult{
+			rv: r, // r will be updated by FromString
+		}, e
+	}
 }
 
 func validateArgAndCommand(
