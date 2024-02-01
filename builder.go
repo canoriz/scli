@@ -156,7 +156,9 @@ type cmdInfo struct {
 	fullUsage  string
 }
 
-func buildParseFn(fieldChain string, viewNameChain string, u reflect.Value) (p parseFn, usageText string) {
+func buildParseFn(
+	fieldChain string, viewNameChain string, u reflect.Value,
+) (p parseFn, usageText string) {
 	argStructPtr := u.Elem() // *T -> T
 	structDef := u.Type().Elem()
 
@@ -461,7 +463,11 @@ func buildArgAndCommandList(
 								return parseFloat64
 							}, nil
 						default:
-							return nil, errors.New("[]T, *T is not Parse")
+							return nil, fmt.Errorf(
+								errNotImplParse,
+								ptrToElem.Type(),
+								fmt.Sprintf("%s.%s", fieldChain, defName),
+							)
 						}
 					}
 				}()
