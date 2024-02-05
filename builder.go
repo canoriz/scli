@@ -643,17 +643,20 @@ func parseBool(s []string) (parseResult, error) {
 		rv: reflect.ValueOf(b),
 	}, e
 }
+
 func parseString(s []string) (parseResult, error) {
 	return parseResult{
 		rv: reflect.ValueOf(strings.Join(s, "")),
 	}, nil
 }
+
 func parseInt(s []string) (parseResult, error) {
 	b, e := strconv.ParseInt(strings.Join(s, ""), 0, 64)
 	return parseResult{
 		rv: reflect.ValueOf(int(b)),
 	}, e
 }
+
 func parseFloat64(s []string) (parseResult, error) {
 	b, e := strconv.ParseFloat(strings.Join(s, ""), 64)
 	return parseResult{
