@@ -166,7 +166,7 @@ func TestParseError(t *testing.T) {
 	var a Arg
 	for _, c := range parseError {
 		t.Run(c.about, func(t *testing.T) {
-			_, err := BuildParser(&a).ParseArg(strings.Split(c.arg, " "))
+			_, err := BuildParser(&a).ParseArg(c.arg)
 			if err == nil {
 				t.Error("should error")
 			}
@@ -177,8 +177,8 @@ func TestParseError(t *testing.T) {
 func TestParseOk(t *testing.T) {
 	var a Arg
 	{
-		input := "-sz 14 -big qwerty -vsz 3 -s " +
-			"18:13 -addr-list 18:13,14:12,15:11 add -n a -/b high -n af"
+		input := "-sz  14 -big qwerty -vsz 3 -s " +
+			"18:13 -addr-list 18:13,14:12,15:11 add -n  a -/b high -n af "
 		expected := Arg{
 			Size:            14,
 			VSize:           3,
@@ -193,7 +193,7 @@ func TestParseOk(t *testing.T) {
 			},
 		}
 		parser := BuildParser(&a)
-		r, err := parser.ParseArg(strings.Split(input, " "))
+		r, err := parser.ParseArg(input)
 		if err != nil {
 			t.Error(err)
 		}
@@ -208,7 +208,7 @@ func TestParseOk(t *testing.T) {
 
 	{
 		parser := BuildParser(&a)
-		_, err := parser.ParseArg(strings.Split("--help", " "))
+		_, err := parser.ParseArg("--help")
 		if !errors.Is(err, ErrIsHelp) {
 			t.Fatalf("should be help, get %v", err)
 		}

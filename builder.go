@@ -17,7 +17,7 @@ type Parse interface {
 type Parser[T any] interface {
 	Help() string
 	Parse() T
-	ParseArg(s []string) (zero T, err error)
+	ParseArg(s string) (zero T, err error)
 }
 
 var (
@@ -64,8 +64,8 @@ type parser[T any] struct {
 	help  string
 }
 
-func (p parser[T]) ParseArg(s []string) (zero T, err error) {
-	r, e := p.parse(s)
+func (p parser[T]) ParseArg(s string) (zero T, err error) {
+	r, e := p.parse(strings.Fields(s))
 	if e != nil {
 		return zero, e
 	}
