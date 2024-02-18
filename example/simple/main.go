@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/canoriz/scli"
 )
@@ -52,7 +51,7 @@ func main() {
 	}
 
 	// parseArg can parse from []string instead of from CLI
-	parser.ParseArg(strings.Split("-p add -N1 3 -N2 4", " "))
+	parser.ParseArg("-p add -N1 3 -N2 4")
 }
 
 func printIfTrue(p bool, v any) {
