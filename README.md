@@ -1,10 +1,151 @@
 # scli
-Defining an argument struct and calling `scli` is all you need to create a CLI application.
+Build a command line argument parser by defining a struct
+
+# Example
+This example is in example/simple/main.go
+```go
+// define flag, default and usage in struct field's tags
+type Arg struct {
+	// Flags(no value) are defined by bool type field
+	Help bool `flag:"h" default:"false" usage:"print help"`
+
+	// Arguments(with value) are defined by field of their types
+	Name  string `flag:"name" default:"you" usage:"your name"`
+	Email string `flag:"email" default:"you@example.com" usage:"your email"`
+
+	// subcommands are defined by *struct{...} field
+	Add *struct {
+		All  bool   `flag:"a" default:"false" usage:"Add all files"`
+		File string `flag:"f" usage:"file to be added"`
+	} `flag:"add" usage:"Add file contents to the index"`
+	Commit *struct{} `flag:"commit" usage:"Record changes to the repository"`
+
+	// subcommands can be nested inside of subcommands!
+	Push *struct {
+		Origin *struct{} `flag:"origin" usage:"Push to origin"`
+	} `flag:"push" usage:"Push to remote repository"`
+}
+
+func main() {
+	var arg Arg // init a empty argument struct
+
+	parser := scli.BuildParser(&arg)
+	parser.Parse()
+    fmt.Printf("%v\n", prettyPrint(arg))
+}
+```
+
+Below are some examples of input CLI arguments and parsed values of ```arg```.
+```bash
+$ ./mygit 
+{
+  "Help": false,
+  "Name": "you",
+  "Email": "you@example.com",
+  "Add": null,
+  "Commit": null,
+  "Push": null
+}
+
+$ ./mygit --name canoriz
+{
+  "Help": false,
+  "Name": "canoriz",
+  "Email": "you@example.com",
+  "Add": null,
+  "Commit": null,
+  "Push": null
+}
+
+$ ./mygit --name canoriz add -a -f source-code
+{
+  "Help": false,
+  "Name": "canoriz",
+  "Email": "you@example.com",
+  "Add": {
+    "All": true,
+    "File": "source-code"
+  },
+  "Commit": null,
+  "Push": null
+}
+
+$ ./mygit --name canoriz commit
+{
+  "Help": false,
+  "Name": "canoriz",
+  "Email": "you@example.com",
+  "Add": null,
+  "Commit": {},
+  "Push": null
+}
+
+$ ./mygit --name canoriz push origin
+{
+  "Help": false,
+  "Name": "canoriz",
+  "Email": "you@example.com",
+  "Add": null,
+  "Commit": null,
+  "Push": {
+    "Origin": {}
+  }
+}
+
+$ ./mygit --name canoriz push
+{
+  "Help": false,
+  "Name": "canoriz",
+  "Email": "you@example.com",
+  "Add": null,
+  "Commit": null,
+  "Push": {
+    "Origin": null
+  }
+}
+
+$ ./mygit --name canoriz add
+error: argument "--f" is required in "./mygit add" but not provided
+
+The usage is:
+Usage: ./mygit add [OPTIONS]
+
+Options:
+    -help, --help           print this message
+    --a, --/a               set [Add all files] to true / false  [default: false]
+    --f <file to be added>
+
+$ ./mygit --help
+Usage: ./mygit [OPTIONS] [COMMAND]
+
+Commands:
+    add     Add file contents to the index
+    commit  Record changes to the repository
+    push    Push to remote repository
+
+Options:
+    -help, --help         print this message
+    --email <your email>  [default: "you@example.com"]
+    --h, --/h             set [print help] to true / false  [default: false]
+    --name <your name>    [default: "you"]
+
+Run `./mygit [COMMAND] -help` to print the help message of COMMAND
+
+$ ./mygit add --help
+Usage: ./mygit add [OPTIONS]
+
+Options:
+    -help, --help           print this message
+    --a, --/a               set [Add all files] to true / false  [default: false]
+    --f <file to be added>
+```
+
 
 # Feature
 
 ## Any type of argument
-Supports arguments of type `int`, `float64`, `bool`, `string` or any type
+Supports arguments of type `int`, `float64`, `bool`, `string`, `[]int`,
+ `[]float`, `[]bool`, `[]string`, or any type `T` that `*T`
 implemented `scli.Parse`.
 
 For example, if `Addr {string; string}` struct defines a `(*Addr).FromString(string) error`
@@ -29,89 +170,6 @@ Supports default value for any type of arguments by simply add a `default` tag, 
   }
   ```
 
-# Example
-```go
-// this is same as example/simple/main.go
-package main
-
-import (
-    "fmt"
-    "strings"
-
-    "github.com/canoriz/scli"
-)
-
-// define arguments struct
-// define flag, default and usage in struct field's tags
-type options struct {
-    Print bool `flag:"p" default:"true" usage:"print result"`
-
-    // subcommands are defined by *struct{...}
-    Add *struct {
-        N1 int `default:"0"`
-        N2 int
-    } `flag:"add" usage:"n1+n2"`
-    Sub *struct {
-        N1 int
-        N2 int
-    } `flag:"sub" usage:"n1-n2"`
-    Mul *struct {
-        N1 int
-        N2 int
-    } `flag:"mul" usage:"n1*n2"`
-    Div *struct {
-        N1 float64
-        N2 float64
-    } // leave Div with no tags
-}
-
-func main() {
-    var op options // init a empty argument struct
-
-    parser := scli.BuildParser(&op)
-    // if Parse() error, program exits
-    // after this, op == op2
-    op = parser.Parse()
-
-    if op.Add != nil {
-        printIfTrue(op.Print, op.Add.N1+op.Add.N2)
-    } else if op.Sub != nil {
-        printIfTrue(op.Print, op.Sub.N1-op.Sub.N2)
-    } else if op.Mul != nil {
-        printIfTrue(op.Print, op.Mul.N1*op.Mul.N2)
-    } else if op.Div != nil {
-        printIfTrue(op.Print, op.Div.N1/op.Div.N2)
-    } else {
-        fmt.Println("exactly one subcommand should be given")
-    }
-
-    // parseArg can parse from []string instead of from CLI
-    parser.ParseArg(strings.Split("-p add -N1 3 -N2 4", " "))
-}
-
-func printIfTrue(p bool, v any) {
-    if p {
-        fmt.Println(v)
-    }
-}
-```
-
-Run `go run example/simple/main.go --help`
-```
-Usage: ./simple [OPTIONS] [COMMAND]
-
-Commands:
-    Div
-    add  n1+n2
-    mul  n1*n2
-    sub  n1-n2
-
-Options:
-    -help, --help  print this message
-    --p, --/p      set [print result] to true / false  [default: true]
-
-Run `./simple [COMMAND] -help` to print the help message of COMMAND
-```
 
 ## Notes for `panic`
 To parse arguments, there are 2 stages.

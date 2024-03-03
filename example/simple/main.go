@@ -2,60 +2,62 @@ package main
 
 import (
 	"fmt"
+	"encoding/json"
 
 	"github.com/canoriz/scli"
 )
 
-// define arguments struct
-// define flag, default and usage in struct field's tags
-type options struct {
-	Print bool `flag:"p" default:"true" usage:"print result"`
+type Arg struct {
+	// Flags(no value) are defined by bool type field
+	Help bool `flag:"h" default:"false" usage:"print help"`
 
-	// subcommands are defined by *struct{...}
+	// Arguments(with value) are defined by field of their types
+	Name  string `flag:"name" default:"you" usage:"your name"`
+	Email string `flag:"email" default:"you@example.com" usage:"your email"`
+
+	// subcommands are defined by *struct{...} field
 	Add *struct {
-		N1 int `default:"0"`
-		N2 int
-	} `flag:"add" usage:"n1+n2"`
-	Sub *struct {
-		N1 int
-		N2 int
-	} `flag:"sub" usage:"n1-n2"`
-	Mul *struct {
-		N1 int
-		N2 int
-	} `flag:"mul" usage:"n1*n2"`
-	Div *struct {
-		N1 float64
-		N2 float64
-	} // leave Div with no tags
+		All  bool   `flag:"a" default:"false" usage:"Add all files"`
+		File string `flag:"f" usage:"file to be added"`
+	} `flag:"add" usage:"Add file contents to the index"`
+	Commit *struct{} `flag:"commit" usage:"Record changes to the repository"`
+
+	// subcommands can be nested inside of subcommands!
+	Push *struct {
+		Origin *struct{} `flag:"origin" usage:"Push to origin"`
+	} `flag:"push" usage:"Push to remote repository"`
 }
 
 func main() {
-	var op options // init a empty argument struct
+	var arg Arg // init a empty argument struct
 
-	parser := scli.BuildParser(&op)
+	parser := scli.BuildParser(&arg)
+	parser.Parse()
 	// if Parse() error, program exits
-	// after this, op == op2
-	op = parser.Parse()
 
-	if op.Add != nil {
-		printIfTrue(op.Print, op.Add.N1+op.Add.N2)
-	} else if op.Sub != nil {
-		printIfTrue(op.Print, op.Sub.N1-op.Sub.N2)
-	} else if op.Mul != nil {
-		printIfTrue(op.Print, op.Mul.N1*op.Mul.N2)
-	} else if op.Div != nil {
-		printIfTrue(op.Print, op.Div.N1/op.Div.N2)
-	} else {
-		fmt.Println("exactly one subcommand should be given")
+	if arg.Help {
+		fmt.Println("help!")
 	}
-
-	// parseArg can parse from []string instead of from CLI
-	parser.ParseArg("-p add -N1 3 -N2 4")
+	// fmt.Printf("name: %v, email: %v\n", arg.Name, arg.Email)
+	// if arg.Commit != nil {
+	// 	fmt.Println("subcommand commit!")
+	// }
+	// if arg.Add != nil {
+	// 	fmt.Println("subcommand add!")
+	// 	fmt.Printf("add file: %v\n", arg.Add.File)
+	// 	fmt.Printf("add all?: %+v\n", arg.Add.All)
+	// }
+	// if arg.Push != nil {
+	// 	fmt.Println("subcommand push!")
+	// 	if arg.Push.Origin != nil {
+	// 		fmt.Println("push to origin!")
+	// 	}
+	// 	fmt.Println("not push to origin!")
+	// }
+	fmt.Printf("%v\n", prettyPrint(arg))
 }
 
-func printIfTrue(p bool, v any) {
-	if p {
-		fmt.Println(v)
-	}
+func prettyPrint(i interface{}) string {
+	s, _ := json.MarshalIndent(i, "", "  ")
+	return string(s)
 }
