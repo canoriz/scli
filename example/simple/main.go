@@ -1,8 +1,8 @@
 package main
 
 import (
-	"fmt"
 	"encoding/json"
+	"fmt"
 
 	"github.com/canoriz/scli"
 )
@@ -12,6 +12,8 @@ type Arg struct {
 	Help bool `flag:"h" default:"false" usage:"print help"`
 
 	// Arguments(with value) are defined by field of their types
+	// define flag, default and usage in struct field's tags
+	// flag, default and usage in tag are all optional
 	Name  string `flag:"name" default:"you" usage:"your name"`
 	Email string `flag:"email" default:"you@example.com" usage:"your email"`
 
@@ -20,6 +22,7 @@ type Arg struct {
 		All  bool   `flag:"a" default:"false" usage:"Add all files"`
 		File string `flag:"f" usage:"file to be added"`
 	} `flag:"add" usage:"Add file contents to the index"`
+
 	Commit *struct{} `flag:"commit" usage:"Record changes to the repository"`
 
 	// subcommands can be nested inside of subcommands!
