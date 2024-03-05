@@ -12,6 +12,38 @@ type panicCase struct {
 	panicCode func()
 }
 
+type noExample struct {
+	ip string
+}
+
+func (n *noExample) FromString(s string) error {
+	n.ip = s
+	return nil
+}
+
+type invalidExample struct {
+	ip string
+}
+
+func (w *invalidExample) FromString(s string) error {
+	if s == "error" {
+		return errors.New("can not be error")
+	}
+	w.ip = s
+	return nil
+}
+
+func (w *invalidExample) Example() string {
+	return "error"
+}
+
+type stringAlias string
+
+func (sa *stringAlias) FromString(s string) error {
+	*sa = stringAlias(s)
+	return nil
+}
+
 type addr struct {
 	ip   string
 	port string
@@ -27,11 +59,19 @@ func (a *addr) FromString(s string) error {
 	return nil
 }
 
+func (a *addr) Example() string {
+	return "127.0.0.1:8000"
+}
+
 type upper string
 
 func (u *upper) FromString(s string) error {
 	*u = upper(strings.ToUpper(s))
 	return nil
+}
+
+func (u *upper) Example() string {
+	return "lower"
 }
 
 var (
@@ -80,10 +120,38 @@ var (
 			}
 			BuildParser(&s0)
 		}}, {
+		"custom field no example",
+		func() {
+			var s0 struct {
+				D noExample `default:"133"`
+			}
+			BuildParser(&s0)
+		}}, {
+		"custom field invalid example",
+		func() {
+			var s0 struct {
+				D invalidExample `default:"133"`
+			}
+			BuildParser(&s0)
+		}}, {
 		"help is argument",
 		func() {
 			var s0 struct {
 				Float1 float64 `flag:"help"`
+			}
+			BuildParser(&s0)
+		}}, {
+		"type alias",
+		func() {
+			var s0 struct {
+				D stringAlias `default:"133"`
+			}
+			BuildParser(&s0)
+		}}, {
+		"type alias in slice",
+		func() {
+			var s0 struct {
+				D []stringAlias `default:"133"`
 			}
 			BuildParser(&s0)
 		}}, {

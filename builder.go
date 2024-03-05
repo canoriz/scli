@@ -12,6 +12,7 @@ import (
 
 type Parse interface {
 	FromString(s string) error
+	Example() string
 }
 
 type Parser[T any] interface {
@@ -30,6 +31,8 @@ const ( // build time errors
 	errNotImplParse   = "*%s did not implement `Parse` interface, at field %s"
 	errNotStructPtr   = "type %v of field %s must be *struct{...} to represent a subcommand, " +
 		"or type `Parse` to represent a custom type"
+	errNotValidExample = "Example() of custom type *%s cannot parsed by FromString(..) " +
+		"at field %s"
 )
 
 const ( // runtime errors
@@ -97,7 +100,7 @@ func (p parser[T]) Help() string {
 
 func BuildParser[T any](u *T) Parser[T] {
 	parse, topHelp := checkTopAndBuildParseFn(u, os.Args[0])
-	return parser[T]{parse, topHelp}
+	return parser[T]{parse: parse, help: topHelp}
 }
 
 func checkTopAndBuildParseFn(u any, execName string) (parseFn, string) {
@@ -142,9 +145,10 @@ type argInfo struct {
 	fullName   string
 	consumeLen int
 	ty         kwType
-	defaultVal string
-	hasDefault bool
 	usage      string
+
+	defaultVal *string // non-nil if argument has a default value
+	example    *string // non-nil if argument is a custom type
 }
 
 type cmdInfo struct {
@@ -237,8 +241,8 @@ func buildParseFn(
 
 		for argName, info := range arg {
 			if _, argFound := encounter[argName]; !argFound {
-				if info.hasDefault {
-					r, err := info.parseFn([]string{info.defaultVal})
+				if info.defaultVal != nil {
+					r, err := info.parseFn([]string{*info.defaultVal})
 					if err != nil {
 						panic(
 							"default values are validated before. " +
@@ -348,22 +352,31 @@ func makeUsageText(viewNameChain string, arg map[string]argInfo, command map[str
 						),
 					)
 				}
-				return fmt.Sprintf(generalArgFmt, argName, unifiedUsage)
+				return appendSpacesToLength(
+					fmt.Sprintf(generalArgFmt, argName, unifiedUsage),
+					maxArgLength,
+				)
 			}()
 
-			if info.hasDefault {
+			if info.defaultVal != nil {
 				defaultText := func() string {
 					if info.ty == boolArg {
-						return fmt.Sprintf(`[default: %s]`, info.defaultVal)
+						return fmt.Sprintf(`[default: %s]`, *info.defaultVal)
 					}
-					return fmt.Sprintf(`[default: "%s"]`, info.defaultVal)
+					return fmt.Sprintf(`[default: "%s"]`, *info.defaultVal)
 				}()
+				argUsage = fmt.Sprintf("%s  %s", argUsage, defaultText)
+			} else if info.example != nil {
+				// if argument has default value, users can learn how to
+				// input this argument by reading the default value, so we
+				// don't need to print an example.
 				argUsage = fmt.Sprintf(
 					"%s  %s",
-					appendSpacesToLength(argUsage, maxArgLength),
-					defaultText,
+					argUsage,
+					fmt.Sprintf(`[example: "%s"]`, *info.example),
 				)
 			}
+
 			argList = append(argList, argUsage)
 		}
 	}
@@ -422,55 +435,86 @@ func buildArgAndCommandList(
 		if flagName == "" {
 			flagName = defName
 		}
-		defaultVal, hasDefault := defField.Tag.Lookup("default")
+		defaultVal := func(fieldDef reflect.StructField) *string {
+			defaultValStr, hasDefault := fieldDef.Tag.Lookup("default")
+			if hasDefault {
+				return &defaultValStr
+			}
+			return nil
+		}(defField)
 		usage := defField.Tag.Get("usage")
 
 		valField := argStructPtr.Field(i)
-		p, e := hasCustomParser(valField)
+		p, exampleCannotParse, e := hasCustomParser(valField)
+		if exampleCannotParse {
+			return arg, command, fmt.Errorf(
+				errNotValidExample,
+				valField.Type(),
+				fmt.Sprintf("%s.%s", fieldChain, defName),
+			)
+		}
 		if e == nil { // has implemented Parse
 			arg[flagName] = argInfo{
-				p,
-				defName,
-				argLen,
-				valArg,
-				defaultVal,
-				hasDefault,
-				usage,
+				parseFn:    p(valField),
+				fullName:   defName,
+				consumeLen: argLen,
+				ty:         valArg,
+				usage:      usage,
+
+				defaultVal: defaultVal,
+				example:    customExampleFor(valField),
 			}
 		} else {
-			switch valField.Kind() {
-			case reflect.Slice:
+			switch {
+			case valField.Kind() == reflect.Slice:
 				ptrToElem := reflect.New(valField.Type().Elem())
-				parseElemFn, err := func() (func(reflect.Value) parseFn, error) {
-					if _, ok := ptrToElem.Interface().(Parse); ok {
-						return customParserFor, nil
-					} else {
-						switch ptrToElem.Elem().Kind() {
-						case reflect.String:
-							return func(_ reflect.Value) parseFn {
-								return parseString
-							}, nil
-						case reflect.Bool:
-							return func(_ reflect.Value) parseFn {
-								return parseBool
-							}, nil
-						case reflect.Int:
-							return func(_ reflect.Value) parseFn {
-								return parseInt
-							}, nil
-						case reflect.Float64:
-							return func(_ reflect.Value) parseFn {
-								return parseFloat64
-							}, nil
-						default:
-							return nil, fmt.Errorf(
-								errNotImplParse,
-								ptrToElem.Type(),
+				parseElemFn, elemExample, err :=
+					func() (func(reflect.Value) parseFn, *string, error) {
+						p, exampleCannotParse, e := hasCustomParser(
+							reflect.New(ptrToElem.Type().Elem()).Elem(),
+						)
+						if exampleCannotParse {
+							return nil, nil, fmt.Errorf(
+								errNotValidExample,
+								ptrToElem.Type().Elem(),
 								fmt.Sprintf("%s.%s", fieldChain, defName),
 							)
 						}
-					}
-				}()
+						if e == nil { // has implemented Parse
+							return p, customExampleFor(
+								reflect.New(ptrToElem.Type().Elem()).Elem(),
+							), nil
+						} else {
+							switch ptrToElem.Elem().Type() {
+							case reflect.TypeOf(string("")):
+								strStr := "str"
+								return func(_ reflect.Value) parseFn {
+									return parseString
+								}, &strStr, nil
+							case reflect.TypeOf(bool(false)):
+								falseStr := "false"
+								return func(_ reflect.Value) parseFn {
+									return parseBool
+								}, &falseStr, nil
+							case reflect.TypeOf(int(0)):
+								intStr := "0"
+								return func(_ reflect.Value) parseFn {
+									return parseInt
+								}, &intStr, nil
+							case reflect.TypeOf(float64(0)):
+								float64Str := "3.14"
+								return func(_ reflect.Value) parseFn {
+									return parseFloat64
+								}, &float64Str, nil
+							default:
+								return nil, nil, fmt.Errorf(
+									errNotImplParse,
+									ptrToElem.Type(),
+									fmt.Sprintf("%s.%s", fieldChain, defName),
+								)
+							}
+						}
+					}()
 				if err != nil {
 					return arg, command, fmt.Errorf(
 						errNotImplParse,
@@ -479,7 +523,7 @@ func buildArgAndCommandList(
 					)
 				}
 				arg[flagName] = argInfo{
-					func(s []string) (parseResult, error) {
+					parseFn: func(s []string) (parseResult, error) {
 						str := strings.Join(s, "")
 						if str == "" {
 							return parseResult{
@@ -500,54 +544,61 @@ func buildArgAndCommandList(
 						}
 						return parseResult{rv: resultSlice}, nil
 					},
-					defName,
-					argLen,
-					valArg,
-					defaultVal,
-					hasDefault,
-					usage,
+					fullName:   defName,
+					consumeLen: argLen,
+					ty:         valArg,
+
+					defaultVal: defaultVal,
+					example: func(elemExample *string) *string {
+						if elemExample != nil {
+							res := fmt.Sprintf(
+								"%v,%v",
+								*elemExample, *elemExample,
+							)
+							return &res
+						}
+						return nil
+					}(elemExample),
+
+					usage: usage,
 				}
-			case reflect.String:
+			case valField.Type() == reflect.TypeOf(string("")):
 				arg[flagName] = argInfo{
-					parseString,
-					defName,
-					argLen,
-					valArg,
-					defaultVal,
-					hasDefault,
-					usage,
+					parseFn:    parseString,
+					fullName:   defName,
+					consumeLen: argLen,
+					ty:         valArg,
+					defaultVal: defaultVal,
+					usage:      usage,
 				}
-			case reflect.Bool:
+			case valField.Type() == reflect.TypeOf(bool(false)):
 				arg[flagName] = argInfo{
-					parseBool,
-					defName,
-					boolArgLen,
-					boolArg,
-					defaultVal,
-					hasDefault,
-					usage,
+					parseFn:    parseBool,
+					fullName:   defName,
+					consumeLen: boolArgLen,
+					ty:         boolArg,
+					defaultVal: defaultVal,
+					usage:      usage,
 				}
-			case reflect.Int:
+			case valField.Type() == reflect.TypeOf(int(0)):
 				arg[flagName] = argInfo{
-					parseInt,
-					defName,
-					argLen,
-					valArg,
-					defaultVal,
-					hasDefault,
-					usage,
+					parseFn:    parseInt,
+					fullName:   defName,
+					consumeLen: argLen,
+					ty:         valArg,
+					defaultVal: defaultVal,
+					usage:      usage,
 				}
-			case reflect.Float64:
+			case valField.Type() == reflect.TypeOf(float64(0)):
 				arg[flagName] = argInfo{
-					parseFloat64,
-					defName,
-					argLen,
-					valArg,
-					defaultVal,
-					hasDefault,
-					usage,
+					parseFn:    parseFloat64,
+					fullName:   defName,
+					consumeLen: argLen,
+					ty:         valArg,
+					defaultVal: defaultVal,
+					usage:      usage,
 				}
-			case reflect.Pointer:
+			case valField.Kind() == reflect.Pointer:
 				// should be *struct{...}
 				fieldType := valField.Type().Elem() // reflect.Type struct{...}
 				if fieldType.Kind() != reflect.Struct {
@@ -564,12 +615,12 @@ func buildArgAndCommandList(
 					fmt.Sprintf("%s %s", viewNameChain, flagName),
 					instance)
 				command[flagName] = cmdInfo{
-					parseFn,
-					defName,
-					subcommandLen,
-					subcommand,
-					usage,
-					usageText,
+					parseFn:    parseFn,
+					fullName:   defName,
+					consumeLen: subcommandLen,
+					ty:         subcommand,
+					usage:      usage,
+					fullUsage:  usageText,
 				}
 			default:
 				return arg, command, fmt.Errorf(
@@ -584,23 +635,31 @@ func buildArgAndCommandList(
 }
 
 // customParser return parseFn for this specific r: reflect.Value
+// returns parseFn, exampleCannotParse, error
+// if r is Parse, but Example() cannot Parse,
 func hasCustomParser(r reflect.Value) (
-	customParser parseFn, err error,
+	customParser func(typeSameAsR reflect.Value) parseFn,
+	exampleCannotParse bool,
+	err error,
 ) {
 	if !r.CanAddr() {
-		return customParser,
+		return customParser, false,
 			fmt.Errorf("can not addr type %v", r.Type())
 	}
-	if _, ok := r.Addr().Interface().(Parse); ok {
-		return customParserFor(r), nil
+	if parse, ok := r.Addr().Interface().(Parse); ok {
+		if parse.FromString(parse.Example()) != nil {
+			return customParser, true,
+				fmt.Errorf("example of %v cannot parse", r.Type())
+		}
+		return customParserFor, false, nil
 	}
-	return customParser,
+	return customParser, false,
 		errors.New("does not implement Parse")
 }
 
 // calling this function returns the specific function parse
 // and set the reflect.Value r by the Parse method defined for
-// type r. Caller MUST ensure r is *Parse.
+// type r. Caller MUST ensure r is *Parse and r.CanAddr()
 func customParserFor(r reflect.Value) parseFn {
 	return func(s []string) (parseResult, error) {
 		e := r.Addr().
@@ -612,8 +671,18 @@ func customParserFor(r reflect.Value) parseFn {
 	}
 }
 
+// calling this function returns the specific .Example()
+// of a reflect.Value r. Caller MUST ensure r is *Parse.
+// and r.CanAddr()
+func customExampleFor(r reflect.Value) *string {
+	eg := r.Addr().
+		Interface().(Parse).
+		Example()
+	return &eg
+}
+
 func validateArgAndCommand(
-	fieldChain string, arg map[string]argInfo, command map[string]cmdInfo,
+	fieldChain string, arg map[string]argInfo, _ map[string]cmdInfo,
 ) error {
 	for flagName, info := range arg {
 		if flagName == "help" {
@@ -622,12 +691,12 @@ func validateArgAndCommand(
 				fmt.Sprintf("%s.%s", fieldChain, info.fullName),
 			)
 		}
-		if info.defaultVal != "" {
-			_, err := arg[flagName].parseFn([]string{info.defaultVal})
+		if info.defaultVal != nil {
+			_, err := arg[flagName].parseFn([]string{*info.defaultVal})
 			if err != nil {
 				return fmt.Errorf(
 					errParseDefault,
-					info.defaultVal,
+					*info.defaultVal,
 					fmt.Sprintf("%s.%s", fieldChain, info.fullName),
 					err,
 				)

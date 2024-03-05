@@ -152,7 +152,8 @@ Supports arguments of type `int`, `float64`, `bool`, `string`, `[]int`,
 implemented `scli.Parse`.
 
 For example, if `Addr {string; string}` struct defines a `(*Addr).FromString(string) error`
-method parsing `127.0.0.1:80` to `Addr {"127.0.0.1", "80"}`, CLI can have a type `Addr`
+method parsing `127.0.0.1:80` to `Addr {"127.0.0.1", "80"}`,
+ and a `(*Addr).Example() string` returns `"1.2.3.4:5678"`, method.CLI can have a type `Addr`
 argument.
 - `./my-program -addr 127.0.0.1:80`
 
@@ -187,8 +188,8 @@ corresponding `Parser`, and compile may error.
 `Parse()`, `ParseArgs(...)` parse input arguments from CLI or `[]string`,
 they never panics, if parse fails, error is returned.
 
-`Parse()` do a bit more than `ParseArgs(...)`. If `Parse()` meets error,
-`Parse()` ends program, show parse errors and program USAGE.
+`Parse()` do a bit more than `ParseArgs(...)`. If error occurred in
+`Parse()`, show parse errors and program USAGE, then program exits.
 
 If a custom type `Custom` is in arguments struct, and the custom type's
 `Custom.FromString(string)` method may `panic`.

@@ -30,6 +30,10 @@ func (a *addr) FromString(s string) error {
 	return nil
 }
 
+func (a *addr) Example() string {
+	return "128.0.0.1:8000"
+}
+
 type Arg struct {
 	Size   int  `flag:"sz" default:"12" usage:"block size"`
 	VSize  int  `flag:"vsz" usage:"vblock size"`
@@ -44,9 +48,8 @@ type Arg struct {
 	Delete *struct {
 		Name int `flag:"n" usage:"delete file"`
 	}
+	SAddr []addr
 }
-
-var a Arg
 
 func main() {
 	var arg Arg
