@@ -199,7 +199,7 @@ func TestPanic(t *testing.T) {
 		t.Run(c.about, func(t *testing.T) {
 			defer func() {
 				if r := recover(); r == nil {
-					t.Errorf("The code did not panic")
+					t.Error("The code did not panic")
 				}
 			}()
 			c.panicCode()
@@ -240,6 +240,29 @@ func TestParseError(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCheckError(t *testing.T) {
+	type A struct {
+		A string `flag:"a"`
+		B string `flag:"b"`
+	}
+	var a A
+	parser := BuildParser(&a).Checker(
+		func(a A) error {
+			if len(a.A) < len(a.B) {
+				return errors.New("len(a) should greater than len(b)")
+			}
+			return nil
+		},
+	)
+	if _, err := parser.ParseArg("--a 333 --b 4444"); err == nil {
+		t.Error("expect check fail, but passed")
+	}
+	if _, err := parser.ParseArg("--a 4444 --b 333"); err != nil {
+		t.Errorf("should ok, but get %v", err)
+	}
+
 }
 
 func TestParseOk(t *testing.T) {

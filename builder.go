@@ -15,12 +15,6 @@ type Parse interface {
 	Example() string
 }
 
-type Parser[T any] interface {
-	Help() string
-	Parse() T
-	ParseArg(s string) (zero T, err error)
-}
-
 var (
 	ErrIsHelp = errors.New("argument is help message")
 )
@@ -62,12 +56,19 @@ func (p parseResult) IsHelp() bool {
 
 type parseFn func([]string) (parseResult, error)
 
-type parser[T any] struct {
+type Parser[T any] struct {
 	parse parseFn
 	help  string
+
+	checkFn func(T) error
 }
 
-func (p parser[T]) ParseArg(s string) (zero T, err error) {
+func (p Parser[T]) Checker(checkFn func(T) error) Parser[T] {
+	p.checkFn = checkFn
+	return p
+}
+
+func (p Parser[T]) ParseArg(s string) (zero T, err error) {
 	r, e := p.parse(strings.Fields(s))
 	if e != nil {
 		return zero, e
@@ -75,10 +76,14 @@ func (p parser[T]) ParseArg(s string) (zero T, err error) {
 	if r.IsHelp() {
 		return zero, ErrIsHelp
 	}
-	return r.rv.Interface().(T), nil
+	res := r.rv.Interface().(T)
+	if p.checkFn != nil {
+		return res, p.checkFn(res)
+	}
+	return res, nil
 }
 
-func (p parser[T]) Parse() T {
+func (p Parser[T]) Parse() T {
 	r, e := p.parse(os.Args[1:])
 	if e != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", e)
@@ -91,16 +96,26 @@ func (p parser[T]) Parse() T {
 		fmt.Print(r.helpText)
 		os.Exit(0)
 	}
-	return r.rv.Interface().(T)
+	res := r.rv.Interface().(T)
+	if p.checkFn != nil {
+		if err := p.checkFn(res); err != nil {
+			fmt.Fprintf(os.Stderr, "parse ok, but check failed: %v\n", err)
+			fmt.Println()
+			fmt.Println("The usage is:")
+			fmt.Print(r.helpText)
+			os.Exit(2)
+		}
+	}
+	return res
 }
 
-func (p parser[T]) Help() string {
+func (p Parser[T]) Help() string {
 	return p.help
 }
 
 func BuildParser[T any](u *T) Parser[T] {
 	parse, topHelp := checkTopAndBuildParseFn(u, os.Args[0])
-	return parser[T]{parse: parse, help: topHelp}
+	return Parser[T]{parse: parse, help: topHelp}
 }
 
 func checkTopAndBuildParseFn(u any, execName string) (parseFn, string) {
