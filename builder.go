@@ -797,7 +797,7 @@ func addCommand(
 ) (map[string]cmdInfo, error) {
 	if _, ok := cmd[cmdName]; ok {
 		return cmd, fmt.Errorf(
-			errArgRedefined,
+			errCmdRedefined,
 			cmdName,
 			field,
 		)
