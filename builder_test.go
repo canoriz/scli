@@ -161,6 +161,22 @@ var (
 				D []int8
 			}
 			BuildParser(&s0)
+		}}, {
+		"duplicate argument",
+		func() {
+			var s0 struct {
+				V0 int `flag:"v"`
+				V1 int `flag:"v"`
+			}
+			BuildParser(&s0)
+		}}, {
+		"duplicate subcommand",
+		func() {
+			var s0 struct {
+				V0 *struct{} `flag:"v"`
+				V1 *struct{} `flag:"v"`
+			}
+			BuildParser(&s0)
 		}},
 	}
 

@@ -23,6 +23,8 @@ const ( // build time errors
 	errParseDefault   = `error parsing default value "%s" of field "%s", error: %w`
 	errHelpIsReserved = `"help" is a reserved word, please change option name of "%s"`
 	errNotImplParse   = "*%s did not implement `Parse` interface, at field %s"
+	errCmdRedefined   = `subcommand %s is redefined, at field %s`
+	errArgRedefined   = `argument %s is redefined, at field %s`
 	errNotStructPtr   = "type %v of field %s must be *struct{...} to represent a subcommand, " +
 		"or type `Parse` to represent a custom type"
 	errNotValidExample = "Example() of custom type *%s cannot parsed by FromString(..) " +
@@ -459,25 +461,33 @@ func buildArgAndCommandList(
 		}(defField)
 		usage := defField.Tag.Get("usage")
 
+		currentFieldChain := fmt.Sprintf("%s.%s", fieldChain, defName)
 		valField := argStructPtr.Field(i)
 		p, exampleCannotParse, e := hasCustomParser(valField)
 		if exampleCannotParse {
 			return arg, command, fmt.Errorf(
 				errNotValidExample,
 				valField.Type(),
-				fmt.Sprintf("%s.%s", fieldChain, defName),
+				currentFieldChain,
 			)
 		}
 		if e == nil { // has implemented Parse
-			arg[flagName] = argInfo{
-				parseFn:    p(valField),
-				fullName:   defName,
-				consumeLen: argLen,
-				ty:         valArg,
-				usage:      usage,
+			if arg, err = addArgument(
+				arg,
+				flagName,
+				argInfo{
+					parseFn:    p(valField),
+					fullName:   defName,
+					consumeLen: argLen,
+					ty:         valArg,
+					usage:      usage,
 
-				defaultVal: defaultVal,
-				example:    customExampleFor(valField),
+					defaultVal: defaultVal,
+					example:    customExampleFor(valField),
+				},
+				currentFieldChain,
+			); err != nil {
+				return nil, nil, err
 			}
 		} else {
 			switch {
@@ -492,7 +502,7 @@ func buildArgAndCommandList(
 							return nil, nil, fmt.Errorf(
 								errNotValidExample,
 								ptrToElem.Type().Elem(),
-								fmt.Sprintf("%s.%s", fieldChain, defName),
+								currentFieldChain,
 							)
 						}
 						if e == nil { // has implemented Parse
@@ -525,7 +535,7 @@ func buildArgAndCommandList(
 								return nil, nil, fmt.Errorf(
 									errNotImplParse,
 									ptrToElem.Type(),
-									fmt.Sprintf("%s.%s", fieldChain, defName),
+									currentFieldChain,
 								)
 							}
 						}
@@ -534,84 +544,118 @@ func buildArgAndCommandList(
 					return arg, command, fmt.Errorf(
 						errNotImplParse,
 						ptrToElem.Type().Elem(),
-						fmt.Sprintf("%s.%s", fieldChain, defName),
+						currentFieldChain,
 					)
 				}
-				arg[flagName] = argInfo{
-					parseFn: func(s []string) (parseResult, error) {
-						str := strings.Join(s, "")
-						if str == "" {
-							return parseResult{
-								rv: reflect.MakeSlice(valField.Type(), 0, 0),
-							}, nil
-						}
-						strSlice := strings.Split(str, ",")
-						resultSlice := reflect.MakeSlice(
-							valField.Type(), len(strSlice), len(strSlice),
-						)
-						for i, si := range strSlice {
-							newElem := reflect.New(ptrToElem.Type().Elem()).Elem()
-							res, err := parseElemFn(newElem)([]string{si})
-							if err != nil {
-								return parseResult{}, err
+				if arg, err = addArgument(
+					arg, flagName,
+					argInfo{
+						parseFn: func(s []string) (parseResult, error) {
+							str := strings.Join(s, "")
+							if str == "" {
+								return parseResult{
+									rv: reflect.MakeSlice(valField.Type(), 0, 0),
+								}, nil
 							}
-							resultSlice.Index(i).Set(res.rv)
-						}
-						return parseResult{rv: resultSlice}, nil
-					},
-					fullName:   defName,
-					consumeLen: argLen,
-					ty:         valArg,
-
-					defaultVal: defaultVal,
-					example: func(elemExample *string) *string {
-						if elemExample != nil {
-							res := fmt.Sprintf(
-								"%v,%v",
-								*elemExample, *elemExample,
+							strSlice := strings.Split(str, ",")
+							resultSlice := reflect.MakeSlice(
+								valField.Type(), len(strSlice), len(strSlice),
 							)
-							return &res
-						}
-						return nil
-					}(elemExample),
+							for i, si := range strSlice {
+								newElem := reflect.New(ptrToElem.Type().Elem()).Elem()
+								res, err := parseElemFn(newElem)([]string{si})
+								if err != nil {
+									return parseResult{}, err
+								}
+								resultSlice.Index(i).Set(res.rv)
+							}
+							return parseResult{rv: resultSlice}, nil
+						},
+						fullName:   defName,
+						consumeLen: argLen,
+						ty:         valArg,
 
-					usage: usage,
+						defaultVal: defaultVal,
+						example: func(elemExample *string) *string {
+							if elemExample != nil {
+								res := fmt.Sprintf(
+									"%v,%v",
+									*elemExample, *elemExample,
+								)
+								return &res
+							}
+							return nil
+						}(elemExample),
+
+						usage: usage,
+					},
+					currentFieldChain,
+				); err != nil {
+					return nil, nil, err
 				}
 			case valField.Type() == reflect.TypeOf(string("")):
-				arg[flagName] = argInfo{
-					parseFn:    parseString,
-					fullName:   defName,
-					consumeLen: argLen,
-					ty:         valArg,
-					defaultVal: defaultVal,
-					usage:      usage,
+				if arg, err = addArgument(
+					arg,
+					flagName,
+					argInfo{
+						parseFn:    parseString,
+						fullName:   defName,
+						consumeLen: argLen,
+						ty:         valArg,
+						defaultVal: defaultVal,
+						usage:      usage,
+					},
+					currentFieldChain,
+				); err != nil {
+					return nil, nil, err
 				}
 			case valField.Type() == reflect.TypeOf(bool(false)):
-				arg[flagName] = argInfo{
-					parseFn:    parseBool,
-					fullName:   defName,
-					consumeLen: boolArgLen,
-					ty:         boolArg,
-					defaultVal: defaultVal,
-					usage:      usage,
+				if arg, err = addArgument(
+					arg,
+					flagName,
+					argInfo{
+						parseFn:    parseBool,
+						fullName:   defName,
+						consumeLen: boolArgLen,
+						ty:         boolArg,
+						defaultVal: defaultVal,
+						usage:      usage,
+					},
+					currentFieldChain,
+				); err != nil {
+					return nil, nil, err
 				}
 			case valField.Type() == reflect.TypeOf(int(0)):
-				arg[flagName] = argInfo{
-					parseFn:    parseInt,
-					fullName:   defName,
-					consumeLen: argLen,
-					ty:         valArg,
-					defaultVal: defaultVal,
-					usage:      usage,
+				if arg, err = addArgument(
+					arg,
+					flagName,
+					argInfo{
+						parseFn:    parseInt,
+						fullName:   defName,
+						consumeLen: argLen,
+						ty:         valArg,
+						defaultVal: defaultVal,
+						usage:      usage,
+					},
+					currentFieldChain,
+				); err != nil {
+					return nil, nil, err
 				}
 			case valField.Type() == reflect.TypeOf(float64(0)):
-				arg[flagName] = argInfo{
-					parseFn:    parseFloat64,
-					fullName:   defName,
-					consumeLen: argLen,
-					ty:         valArg,
-					defaultVal: defaultVal,
-					usage:      usage,
+				if arg, err = addArgument(
+					arg,
+					flagName,
+					argInfo{
+						parseFn:    parseFloat64,
+						fullName:   defName,
+						consumeLen: argLen,
+						ty:         valArg,
+						defaultVal: defaultVal,
+						usage:      usage,
+					},
+					currentFieldChain,
+				); err != nil {
+					return nil, nil, err
 				}
 			case valField.Kind() == reflect.Pointer:
 				// should be *struct{...}
@@ -620,28 +664,35 @@ func buildArgAndCommandList(
 					return arg, command, fmt.Errorf(
 						errNotStructPtr,
 						valField.Type(),
-						fmt.Sprintf("%s.%s", fieldChain, defName),
+						currentFieldChain,
 					)
 				}
 
 				instance := reflect.New(fieldType) // reflect.Value *struct{...}
 				parseFn, usageText := buildParseFn(
-					fmt.Sprintf("%s.%s", fieldChain, defName),
+					currentFieldChain,
 					fmt.Sprintf("%s %s", viewNameChain, flagName),
 					instance)
-				command[flagName] = cmdInfo{
-					parseFn:    parseFn,
-					fullName:   defName,
-					consumeLen: subcommandLen,
-					ty:         subcommand,
-					usage:      usage,
-					fullUsage:  usageText,
+				if command, err = addCommand(
+					command,
+					flagName,
+					cmdInfo{
+						parseFn:    parseFn,
+						fullName:   defName,
+						consumeLen: subcommandLen,
+						ty:         subcommand,
+						usage:      usage,
+						fullUsage:  usageText,
+					},
+					currentFieldChain,
+				); err != nil {
+					return nil, nil, err
 				}
 			default:
 				return arg, command, fmt.Errorf(
 					errNotImplParse,
 					valField.Type(),
-					fmt.Sprintf("%s.%s", fieldChain, defName),
+					currentFieldChain,
 				)
 			}
 		}
@@ -719,6 +770,40 @@ func validateArgAndCommand(
 		}
 	}
 	return nil
+}
+
+func addArgument(
+	arg map[string]argInfo,
+	flagName string,
+	argInfo argInfo,
+	field string, // original field
+) (map[string]argInfo, error) {
+	if _, ok := arg[flagName]; ok {
+		return arg, fmt.Errorf(
+			errArgRedefined,
+			flagName,
+			field,
+		)
+	}
+	arg[flagName] = argInfo
+	return arg, nil
+}
+
+func addCommand(
+	cmd map[string]cmdInfo,
+	cmdName string,
+	cmdInfo cmdInfo,
+	field string, // original field
+) (map[string]cmdInfo, error) {
+	if _, ok := cmd[cmdName]; ok {
+		return cmd, fmt.Errorf(
+			errArgRedefined,
+			cmdName,
+			field,
+		)
+	}
+	cmd[cmdName] = cmdInfo
+	return cmd, nil
 }
 
 func parseBool(s []string) (parseResult, error) {
