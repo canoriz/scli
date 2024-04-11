@@ -46,20 +46,37 @@ func maxInt(a, b int) int {
 	return a
 }
 
-type parseResult struct {
+type parseCmdResult struct {
 	rv        reflect.Value
 	isHelpCmd bool
 	helpText  string
 }
 
-func (p parseResult) IsHelp() bool {
+type parseArgResult struct {
+	rv reflect.Value
+}
+
+func (p parseCmdResult) IsHelp() bool {
 	return p.isHelpCmd
 }
 
-type parseFn func([]string) (parseResult, error)
+type parseCmdError struct {
+	// err is the error causing parse failed
+	// usage is the correct usage, will be printed when
+	// error happens
+	err   error
+	usage string
+}
+
+func (pe *parseCmdError) Error() string {
+	return pe.err.Error()
+}
+
+type parseCmdFn func([]string) (parseCmdResult, *parseCmdError)
+type parseArgFn func([]string) (parseArgResult, error)
 
 type Parser[T any] struct {
-	parse parseFn
+	parse parseCmdFn
 	help  string
 
 	checkFn func(T) error
@@ -91,7 +108,7 @@ func (p Parser[T]) Parse() T {
 		fmt.Fprintf(os.Stderr, "error: %v\n", e)
 		fmt.Println()
 		fmt.Println("The usage is:")
-		fmt.Print(r.helpText)
+		fmt.Print(e.usage)
 		os.Exit(2)
 	}
 	if r.IsHelp() {
@@ -120,11 +137,11 @@ func BuildParser[T any](u *T) Parser[T] {
 	return Parser[T]{parse: parse, help: topHelp}
 }
 
-func checkTopAndBuildParseFn(u any, execName string) (parseFn, string) {
+func checkTopAndBuildParseFn(u any, execName string) (parseCmdFn, string) {
 	if err := checkType(u); err != nil {
 		panic(err)
 	}
-	return buildParseFn(
+	return buildParseCmdFn(
 		reflect.ValueOf(u).Elem().Type().Name(),
 		execName,
 		reflect.ValueOf(u),
@@ -158,7 +175,7 @@ const (
 )
 
 type argInfo struct {
-	parseFn    parseFn
+	parseFn    parseArgFn
 	fullName   string
 	consumeLen int
 	ty         kwType
@@ -169,17 +186,17 @@ type argInfo struct {
 }
 
 type cmdInfo struct {
-	parseFn    parseFn
+	parseFn    parseCmdFn
 	fullName   string
 	consumeLen int
 	ty         kwType
 	usage      string
-	fullUsage  string
+	// fullUsage  string
 }
 
-func buildParseFn(
+func buildParseCmdFn(
 	fieldChain string, viewNameChain string, u reflect.Value,
-) (p parseFn, usageText string) {
+) (p parseCmdFn, usageText string) {
 	argStructPtr := u.Elem() // *T -> T
 	structDef := u.Type().Elem()
 
@@ -194,27 +211,30 @@ func buildParseFn(
 		panic(err)
 	}
 
-	parse := func(input []string) (parseResult, error) {
+	parse := func(input []string) (parseCmdResult, *parseCmdError) {
 		encounter := make(map[string]bool)
-		parseRes := parseResult{
-			helpText: makeUsageText(viewNameChain, arg, command),
-		}
+		helpText := makeUsageText(viewNameChain, arg, command)
 		for len(input) > 0 {
 			first, rest := input[0], input[1:]
 			switch {
 			case strings.HasPrefix(first, "-"):
 				realOption := strings.Trim(first, "-/")
 				if realOption == "help" {
-					parseRes.isHelpCmd = true
-					return parseRes, nil
+					return parseCmdResult{
+						helpText:  helpText,
+						isHelpCmd: true,
+					}, nil
 				}
 				t, ok := arg[realOption]
 				if !ok {
-					return parseRes, fmt.Errorf(
-						errNoArgument,
-						realOption,
-						viewNameChain,
-					)
+					return parseCmdResult{}, &parseCmdError{
+						err: fmt.Errorf(
+							errNoArgument,
+							realOption,
+							viewNameChain,
+						),
+						usage: helpText,
+					}
 				}
 				encounter[realOption] = true
 				if t.ty == boolArg {
@@ -225,16 +245,23 @@ func buildParseFn(
 					)
 				} else {
 					if len(input) < t.consumeLen {
-						return parseRes, fmt.Errorf(
-							errNoValue, realOption, viewNameChain,
-						)
+						return parseCmdResult{}, &parseCmdError{
+							err: fmt.Errorf(
+								errNoValue, realOption, viewNameChain,
+							),
+							usage: helpText,
+						}
 					}
 					val := input[1:t.consumeLen]
 					r, err := t.parseFn(val)
 					if err != nil {
-						return parseResult{}, fmt.Errorf(
-							errParseArg, realOption, strings.Join(val, ""), err,
-						)
+						return parseCmdResult{}, &parseCmdError{
+							err: fmt.Errorf(
+								errParseArg,
+								realOption, strings.Join(val, ""), err,
+							),
+							usage: helpText,
+						}
 					}
 					argStructPtr.FieldByName(t.fullName).Set(r.rv)
 				}
@@ -242,7 +269,12 @@ func buildParseFn(
 			default: // subcommand
 				t, ok := command[first]
 				if !ok {
-					return parseRes, fmt.Errorf(errNoSubcommand, first, viewNameChain)
+					return parseCmdResult{}, &parseCmdError{
+						err: fmt.Errorf(
+							errNoSubcommand, first, viewNameChain,
+						),
+						usage: helpText,
+					}
 				}
 				r, err := t.parseFn(rest)
 				if err != nil {
@@ -268,16 +300,21 @@ func buildParseFn(
 					}
 					argStructPtr.FieldByName(info.fullName).Set(r.rv)
 				} else {
-					return parseRes, fmt.Errorf(
-						errArgNotFound,
-						argName,
-						viewNameChain,
-					)
+					return parseCmdResult{}, &parseCmdError{
+						err: fmt.Errorf(
+							errArgNotFound,
+							argName,
+							viewNameChain,
+						),
+						usage: helpText,
+					}
 				}
 			}
 		}
-		parseRes.rv = argStructPtr
-		return parseRes, nil
+		return parseCmdResult{
+			rv:       argStructPtr,
+			helpText: helpText,
+		}, nil
 	}
 	return parse, makeUsageText(viewNameChain, arg, command)
 }
@@ -494,7 +531,7 @@ func buildArgAndCommandList(
 			case valField.Kind() == reflect.Slice:
 				ptrToElem := reflect.New(valField.Type().Elem())
 				parseElemFn, elemExample, err :=
-					func() (func(reflect.Value) parseFn, *string, error) {
+					func() (func(reflect.Value) parseArgFn, *string, error) {
 						p, exampleCannotParse, e := hasCustomParser(
 							reflect.New(ptrToElem.Type().Elem()).Elem(),
 						)
@@ -513,22 +550,22 @@ func buildArgAndCommandList(
 							switch ptrToElem.Elem().Type() {
 							case reflect.TypeOf(string("")):
 								strStr := "str"
-								return func(_ reflect.Value) parseFn {
+								return func(_ reflect.Value) parseArgFn {
 									return parseString
 								}, &strStr, nil
 							case reflect.TypeOf(bool(false)):
 								falseStr := "false"
-								return func(_ reflect.Value) parseFn {
+								return func(_ reflect.Value) parseArgFn {
 									return parseBool
 								}, &falseStr, nil
 							case reflect.TypeOf(int(0)):
 								intStr := "0"
-								return func(_ reflect.Value) parseFn {
+								return func(_ reflect.Value) parseArgFn {
 									return parseInt
 								}, &intStr, nil
 							case reflect.TypeOf(float64(0)):
 								float64Str := "3.14"
-								return func(_ reflect.Value) parseFn {
+								return func(_ reflect.Value) parseArgFn {
 									return parseFloat64
 								}, &float64Str, nil
 							default:
@@ -550,10 +587,10 @@ func buildArgAndCommandList(
 				if arg, err = addArgument(
 					arg, flagName,
 					argInfo{
-						parseFn: func(s []string) (parseResult, error) {
+						parseFn: func(s []string) (parseArgResult, error) {
 							str := strings.Join(s, "")
 							if str == "" {
-								return parseResult{
+								return parseArgResult{
 									rv: reflect.MakeSlice(valField.Type(), 0, 0),
 								}, nil
 							}
@@ -565,11 +602,11 @@ func buildArgAndCommandList(
 								newElem := reflect.New(ptrToElem.Type().Elem()).Elem()
 								res, err := parseElemFn(newElem)([]string{si})
 								if err != nil {
-									return parseResult{}, err
+									return parseArgResult{}, err
 								}
 								resultSlice.Index(i).Set(res.rv)
 							}
-							return parseResult{rv: resultSlice}, nil
+							return parseArgResult{rv: resultSlice}, nil
 						},
 						fullName:   defName,
 						consumeLen: argLen,
@@ -669,7 +706,9 @@ func buildArgAndCommandList(
 				}
 
 				instance := reflect.New(fieldType) // reflect.Value *struct{...}
-				parseFn, usageText := buildParseFn(
+
+				// usage text of subcommands is not used
+				parseFn, _ := buildParseCmdFn(
 					currentFieldChain,
 					fmt.Sprintf("%s %s", viewNameChain, flagName),
 					instance)
@@ -682,7 +721,7 @@ func buildArgAndCommandList(
 						consumeLen: subcommandLen,
 						ty:         subcommand,
 						usage:      usage,
-						fullUsage:  usageText,
+						// fullUsage:  usageText,
 					},
 					currentFieldChain,
 				); err != nil {
@@ -702,9 +741,9 @@ func buildArgAndCommandList(
 
 // customParser return parseFn for this specific r: reflect.Value
 // returns parseFn, exampleCannotParse, error
-// if r is Parse, but Example() cannot Parse,
+// if r is Parse, but Example() cannot Parse, return exampleCannotParse = true
 func hasCustomParser(r reflect.Value) (
-	customParser func(typeSameAsR reflect.Value) parseFn,
+	customParser func(typeSameAsR reflect.Value) parseArgFn,
 	exampleCannotParse bool,
 	err error,
 ) {
@@ -725,13 +764,14 @@ func hasCustomParser(r reflect.Value) (
 
 // calling this function returns the specific function parse
 // and set the reflect.Value r by the Parse method defined for
-// type r. Caller MUST ensure r is *Parse and r.CanAddr()
-func customParserFor(r reflect.Value) parseFn {
-	return func(s []string) (parseResult, error) {
+// type r.
+// NOTICE: Caller MUST ensure r is *Parse and r.CanAddr()
+func customParserFor(r reflect.Value) parseArgFn {
+	return func(s []string) (parseArgResult, error) {
 		e := r.Addr().
 			Interface().(Parse).
 			FromString(strings.Join(s, ""))
-		return parseResult{
+		return parseArgResult{
 			rv: r, // r will be updated by FromString
 		}, e
 	}
@@ -806,29 +846,29 @@ func addCommand(
 	return cmd, nil
 }
 
-func parseBool(s []string) (parseResult, error) {
+func parseBool(s []string) (parseArgResult, error) {
 	b, e := strconv.ParseBool(strings.Join(s, ""))
-	return parseResult{
+	return parseArgResult{
 		rv: reflect.ValueOf(b),
 	}, e
 }
 
-func parseString(s []string) (parseResult, error) {
-	return parseResult{
+func parseString(s []string) (parseArgResult, error) {
+	return parseArgResult{
 		rv: reflect.ValueOf(strings.Join(s, "")),
 	}, nil
 }
 
-func parseInt(s []string) (parseResult, error) {
+func parseInt(s []string) (parseArgResult, error) {
 	b, e := strconv.ParseInt(strings.Join(s, ""), 0, 64)
-	return parseResult{
+	return parseArgResult{
 		rv: reflect.ValueOf(int(b)),
 	}, e
 }
 
-func parseFloat64(s []string) (parseResult, error) {
+func parseFloat64(s []string) (parseArgResult, error) {
 	b, e := strconv.ParseFloat(strings.Join(s, ""), 64)
-	return parseResult{
+	return parseArgResult{
 		rv: reflect.ValueOf(b),
 	}, e
 }
