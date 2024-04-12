@@ -191,7 +191,6 @@ type cmdInfo struct {
 	consumeLen int
 	ty         kwType
 	usage      string
-	// fullUsage  string
 }
 
 func buildParseCmdFn(
@@ -721,7 +720,6 @@ func buildArgAndCommandList(
 						consumeLen: subcommandLen,
 						ty:         subcommand,
 						usage:      usage,
-						// fullUsage:  usageText,
 					},
 					currentFieldChain,
 				); err != nil {
