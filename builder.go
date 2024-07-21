@@ -20,23 +20,31 @@ var (
 )
 
 const ( // build time errors
-	errParseDefault   = `error parsing default value "%s" of field "%s", error: %w`
-	errHelpIsReserved = `"help" is a reserved word, please change option name of "%s"`
-	errNotImplParse   = "*%s did not implement `Parse` interface, at field %s"
-	errCmdRedefined   = `subcommand %s is redefined, at field %s`
-	errArgRedefined   = `argument %s is redefined, at field %s`
-	errNotStructPtr   = "type %v of field %s must be *struct{...} to represent a subcommand, " +
+	errParseDefault      = `error parsing default value "%s" of field "%s", error: %w`
+	errHelpIsReserved    = `"help" is a reserved word, please change option name of "%s"`
+	errNotImplParse      = "*%s did not implement `Parse` interface, at field %s"
+	errCmdRedefined      = `subcommand %s is redefined, at field %s`
+	errOptionRedefined   = `option %s is redefined, at field %s`
+	errArgRedefined      = `argument %s is redefined, at field %s`
+	errBothArgAndCommand = `command %s and argument %s both defined, which is not allowed,` +
+		` at field %s and %s`
+	errNotStructPtr = "type %v of field %s must be *struct{...} to represent a subcommand, " +
 		"or type `Parse` to represent a custom type"
 	errNotValidExample = "Example() of custom type *%s cannot parsed by FromString(..) " +
 		"at field %s"
+	errArgHasDefault = "positional argument does not allow default value, type %s at field %s"
 )
 
 const ( // runtime errors
-	errNoValue      = `no value provided for argument "--%s" in %s`
-	errNoArgument   = `argument "--%s" provided in "%s" but not defined`
-	errNoSubcommand = `subcommand "%s" provided in "%s" but not defined`
-	errParseArg     = `error parsing argument "--%s %s" error: %w`
-	errArgNotFound  = `argument "--%s" is required in "%s" but not provided`
+	errOptionNoValue     = `no value provided for option "--%s" in %s`
+	errNoOption          = `option "--%s" provided in "%s" but not defined`
+	errNoSubcommand      = `subcommand "%s" provided in "%s" but not defined`
+	errRemainUnparsed    = `parse success until "%s", maybe remove "%s" and try again?`
+	errParseOption       = `error parsing argument of option "--%s %s" error: %w`
+	errParsePositonalArg = `error parsing positional argument "%s" value %s, error: %w`
+	errTooManyArgs       = `error parsing positional argument: too many args, expect %d, given %d args`
+	errOptionNotFound    = `option "--%s" is required in "%s" but not provided`
+	errArgNotFound       = `expect %v argument(s) but only %v provided (in definition %s)`
 )
 
 func maxInt(a, b int) int {
@@ -45,6 +53,12 @@ func maxInt(a, b int) int {
 	}
 	return a
 }
+
+// type inputType int
+// const (
+// 		notOption inputType = iota
+// 		validOption
+// 		maybeOption
 
 type parseCmdResult struct {
 	rv        reflect.Value
@@ -155,7 +169,7 @@ func checkType(u any) error {
 	}
 	argStructPtr := ptr.Elem() // *T -> T
 	if argStructPtr.Kind() != reflect.Struct {
-		return errors.New("in BuildParser(v), type of v  must be *struct{...}")
+		return errors.New("in BuildParser(v), type of v must be *struct{...}")
 	}
 	return nil
 }
@@ -169,28 +183,70 @@ const (
 type kwType int
 
 const (
-	boolArg = iota
+	boolArg kwType = iota
 	valArg
-	subcommand
 )
 
-type argInfo struct {
+// cmdInfo contains general information of a command
+// A command can have options, arguments and sub-commands
+// cmdInfo is used to build parse functions
+type cmdInfo struct {
+	options map[string]optionInfo
+	subcmds map[string]subcmdInfo
+	args    []argInfo // preserving order of positional arguments
+}
+
+func newCmdInfo() cmdInfo {
+	return cmdInfo{
+		options: map[string]optionInfo{},
+		subcmds: map[string]subcmdInfo{},
+		args:    []argInfo{},
+	}
+}
+
+// optionInfo contains information for options (--optino value)
+type optionInfo struct {
 	parseFn    parseArgFn
-	fullName   string
+	defName    string // name of field in struct definition
 	consumeLen int
-	ty         kwType
+	ty         kwType // type of option argument. boolean or normal argument
 	usage      string
 
 	defaultVal *string // non-nil if argument has a default value
 	example    *string // non-nil if argument is a custom type
 }
 
-type cmdInfo struct {
-	parseFn    parseCmdFn
-	fullName   string
+// argInfo contains information for positional arguments
+// eg: cmd arg1 arg2
+type argInfo struct {
+	cliName string // argument name in CLI
+	parseFn parseArgFn
+	defName string // name of field in struct definition
+	usage   string
+	example *string // non-nil if argument is a custom type
+}
+
+// define argOrOption to make call simpler
+type argOrOption struct {
+	isArg bool
+
+	// common for both argument and option
+	parseFn parseArgFn
+	defName string // name of field in struct definition
+	usage   string
+	example *string // non-nil if custom type
+
+	// only valid if isArg == false, e.g. is option
 	consumeLen int
-	ty         kwType
-	usage      string
+	ty         kwType  // type of option argument. boolean or normal argument
+	defaultVal *string // non-nil if argument has a default value
+}
+
+// subcmdInfo contains information of a subcommand
+type subcmdInfo struct {
+	parseFn parseCmdFn
+	defName string
+	usage   string
 }
 
 func buildParseCmdFn(
@@ -199,24 +255,142 @@ func buildParseCmdFn(
 	argStructPtr := u.Elem() // *T -> T
 	structDef := u.Type().Elem()
 
-	arg, command, err := buildArgAndCommandList(
+	cmd, err := buildArgAndCommandList(
 		fieldChain, viewNameChain, structDef, argStructPtr,
 	)
 	if err != nil {
 		panic(err)
 	}
-	err = validateArgAndCommand(fieldChain, arg, command)
+	err = validateArgAndCommand(fieldChain, cmd)
 	if err != nil {
 		panic(err)
 	}
 
+	// parseOption try to parse input as an option
+	// if ok, set argStruct and returns (remaind input, nil)
+	// if failed, returns (input unchanged, error)
+	parseOption := func(cmd cmdInfo, helpText string, input []string) (
+		_rest []string, _err *parseCmdError,
+	) {
+		first, _ := input[0], input[1:]
+		option := strings.Trim(first, "-/")
+
+		t, ok := cmd.options[option]
+		if !ok {
+			return input, &parseCmdError{
+				err:   fmt.Errorf(errNoOption, option, viewNameChain),
+				usage: helpText,
+			}
+		}
+		if t.ty == boolArg {
+			argStructPtr.FieldByName(t.defName).Set(
+				reflect.ValueOf(
+					!strings.HasPrefix(strings.Trim(first, "-"), "/"),
+				),
+			)
+		} else {
+			if len(input) < t.consumeLen {
+				return input, &parseCmdError{
+					err: fmt.Errorf(
+						errOptionNoValue, option, viewNameChain,
+					),
+					usage: helpText,
+				}
+			}
+			val := input[1:t.consumeLen] // ["--option", "arg"], we take "arg"
+			r, err := t.parseFn(val)
+			if err != nil {
+				return input, &parseCmdError{
+					err: fmt.Errorf(
+						errParseOption,
+						option, strings.Join(val, ""), err,
+					),
+					usage: helpText,
+				}
+			}
+			// parse success
+			argStructPtr.FieldByName(t.defName).Set(r.rv)
+		}
+		return input[t.consumeLen:], nil
+	}
+
+	// parseArg try to parse input as an argument
+	// if ok, set argStruct and returns (remaind input, nil)
+	// if failed, returns (input unchanged, error)
+	parseArg := func(
+		cmd cmdInfo, helpText string,
+		argNumber int, input []string,
+	) (
+		_rest []string, _err *parseCmdError,
+	) {
+		first, _ := input[0], input[1:]
+		if len(cmd.args) <= argNumber {
+			return input, &parseCmdError{
+				err: fmt.Errorf(
+					errTooManyArgs,
+					len(cmd.args),
+					len(input)+len(cmd.args),
+				),
+				usage: helpText,
+			}
+		}
+		// TODO: []T arguments splitted by space
+		t := cmd.args[argNumber]
+		r, err := t.parseFn([]string{first})
+		if err != nil {
+			return input, &parseCmdError{
+				err: fmt.Errorf(
+					errParsePositonalArg,
+					t.cliName, first, err,
+				),
+				usage: helpText,
+			}
+		}
+		argStructPtr.FieldByName(t.defName).Set(r.rv)
+		return input[1:], nil
+	}
+
+	// parseSubcmd try to parse input as an subcommand
+	// If ok, set argStruct and returns (_, parseCmdResult, nil)
+	// If failed, returns (_, nil, error)
+	// If input is a subcommand help or subcommand error, directReturn will be true
+	// caller should return immediately
+	parseSubcmd := func(cmd cmdInfo, helpText string, input []string) (
+		_directReturn bool, _result parseCmdResult, _err *parseCmdError,
+	) {
+		first, rest := input[0], input[1:]
+		t, ok := cmd.subcmds[first]
+		if !ok {
+			return true, parseCmdResult{}, &parseCmdError{
+				err: fmt.Errorf(
+					errNoSubcommand, first, viewNameChain,
+				),
+				usage: helpText,
+			}
+		}
+		r, err := t.parseFn(rest)
+		if err != nil {
+			return true, r, err
+		}
+		if r.IsHelp() {
+			return true, r, nil
+		}
+		argStructPtr.FieldByName(t.defName).Set(r.rv.Addr())
+		return false, parseCmdResult{}, nil
+	}
+
 	parse := func(input []string) (parseCmdResult, *parseCmdError) {
 		encounter := make(map[string]bool)
-		helpText := makeUsageText(viewNameChain, arg, command)
+		argsProcessed := 0
+		helpText := makeUsageText(viewNameChain, cmd)
+
+		noMoreOption := false
+		// parse options and args
 		for len(input) > 0 {
-			first, rest := input[0], input[1:]
-			switch {
-			case strings.HasPrefix(first, "-"):
+			first, _ := input[0], input[1:]
+			// if input starts with "-" but not valid option,
+			// it may be a argument value
+			if strings.HasPrefix(first, "-") && !noMoreOption {
 				realOption := strings.Trim(first, "-/")
 				if realOption == "help" {
 					return parseCmdResult{
@@ -224,71 +398,85 @@ func buildParseCmdFn(
 						isHelpCmd: true,
 					}, nil
 				}
-				t, ok := arg[realOption]
-				if !ok {
-					return parseCmdResult{}, &parseCmdError{
-						err: fmt.Errorf(
-							errNoArgument,
-							realOption,
-							viewNameChain,
-						),
-						usage: helpText,
+
+				remain, parseOptionErr := parseOption(cmd, helpText, input)
+				if parseOptionErr != nil {
+					remain, parseArgErr := parseArg(cmd, helpText, argsProcessed, input)
+					if parseArgErr != nil {
+						// TODO: tell user it's not option and also not arg
+						return parseCmdResult{}, parseOptionErr
 					}
-				}
-				encounter[realOption] = true
-				if t.ty == boolArg {
-					argStructPtr.FieldByName(t.fullName).Set(
-						reflect.ValueOf(
-							!strings.HasPrefix(strings.Trim(first, "-"), "/"),
-						),
-					)
+					// the input parsed success, from now on, no more options
+					// all input should be args
+					noMoreOption = true
+					input = remain
+					argsProcessed++
 				} else {
-					if len(input) < t.consumeLen {
-						return parseCmdResult{}, &parseCmdError{
-							err: fmt.Errorf(
-								errNoValue, realOption, viewNameChain,
-							),
-							usage: helpText,
-						}
-					}
-					val := input[1:t.consumeLen]
-					r, err := t.parseFn(val)
-					if err != nil {
-						return parseCmdResult{}, &parseCmdError{
-							err: fmt.Errorf(
-								errParseArg,
-								realOption, strings.Join(val, ""), err,
-							),
-							usage: helpText,
-						}
-					}
-					argStructPtr.FieldByName(t.fullName).Set(r.rv)
+					encounter[realOption] = true
+					input = remain
 				}
-				input = input[t.consumeLen:]
-			default: // subcommand
-				t, ok := command[first]
-				if !ok {
+			} else if cmd.HasArgs() {
+				if len(cmd.args) <= argsProcessed {
 					return parseCmdResult{}, &parseCmdError{
 						err: fmt.Errorf(
-							errNoSubcommand, first, viewNameChain,
+							errTooManyArgs,
+							len(cmd.args),
+							len(input)+len(cmd.args),
 						),
 						usage: helpText,
 					}
 				}
-				r, err := t.parseFn(rest)
+				noMoreOption = true
+				remain, err := parseArg(cmd, helpText, argsProcessed, input)
 				if err != nil {
-					return r, err
+					return parseCmdResult{}, err
 				}
-				if r.IsHelp() {
-					return r, nil
-				}
-				argStructPtr.FieldByName(t.fullName).Set(r.rv.Addr())
-				input = input[:0] // break for
+				input = remain
+				argsProcessed++
+			} else {
+				// this is not a valid option, nor a valid argument (or no argument)
+				// TODO: what error should say?
+				break
 			}
 		}
 
-		for argName, info := range arg {
-			if _, argFound := encounter[argName]; !argFound {
+		if len(input) > 0 {
+			if cmd.HasSubcmds() {
+				directReturn, r, err := parseSubcmd(cmd, helpText, input)
+				if directReturn {
+					return r, err
+				}
+				if err != nil {
+					return parseCmdResult{}, err
+				}
+			} else {
+				// if input remains and no available sub commands, it's a error
+				return parseCmdResult{}, &parseCmdError{
+					err: fmt.Errorf(
+						errRemainUnparsed,
+						strings.Join(input, " "), strings.Join(input, " "),
+					),
+					usage: helpText,
+				}
+			}
+		}
+		// check all arguments are given
+		// if struct did not define argument, cmd.args will be empty
+		// below check will pass
+		if cmd.HasArgs() && argsProcessed < len(cmd.args) {
+			return parseCmdResult{}, &parseCmdError{
+				err: fmt.Errorf(
+					errArgNotFound,
+					len(cmd.args), argsProcessed,
+					viewNameChain,
+				),
+				usage: helpText,
+			}
+		}
+
+		// check all required options are given
+		for optionName, info := range cmd.options {
+			if _, argFound := encounter[optionName]; !argFound {
 				if info.defaultVal != nil {
 					r, err := info.parseFn([]string{*info.defaultVal})
 					if err != nil {
@@ -297,12 +485,12 @@ func buildParseCmdFn(
 								"Cannot parse error at parse",
 						)
 					}
-					argStructPtr.FieldByName(info.fullName).Set(r.rv)
+					argStructPtr.FieldByName(info.defName).Set(r.rv)
 				} else {
 					return parseCmdResult{}, &parseCmdError{
 						err: fmt.Errorf(
-							errArgNotFound,
-							argName,
+							errOptionNotFound,
+							optionName,
 							viewNameChain,
 						),
 						usage: helpText,
@@ -310,12 +498,13 @@ func buildParseCmdFn(
 				}
 			}
 		}
+
 		return parseCmdResult{
 			rv:       argStructPtr,
 			helpText: helpText,
 		}, nil
 	}
-	return parse, makeUsageText(viewNameChain, arg, command)
+	return parse, makeUsageText(viewNameChain, cmd)
 }
 
 type mapString[V any] struct {
@@ -336,158 +525,28 @@ func sortMap[V any](m map[string]V) []mapString[V] {
 	return r
 }
 
-func makeUsageText(viewNameChain string, arg map[string]argInfo, command map[string]cmdInfo) string {
-	shiftFour := func(s string) string {
-		const fourSpace = "    "
-		return fourSpace + s
-	}
-	fmap := func(ss []string, f func(string) string) []string {
-		for i, s := range ss {
-			ss[i] = f(s)
-		}
-		return ss
-	}
-	appendSpacesToLength := func(s string, toLength int) string {
-		needSpace := toLength - len(s)
-		for i := 0; i < needSpace; i++ {
-			s += " "
-		}
-		return s
-	}
-
-	const helpArg = "-help, --help"
-	const boolArgFmt = "--%s, --/%s"
-	const generalArgFmt = "--%s <%s>"
-	argList := []string{}
-	{
-		maxArgLength := len(helpArg)
-		for _, a := range sortMap(arg) {
-			argName := a.key
-			argInfo := a.val
-			unifiedUsage := argName
-			if argInfo.usage != "" {
-				unifiedUsage = a.val.usage
-			}
-			maxArgLength = maxInt(
-				maxArgLength,
-				func() int {
-					if a.val.ty == boolArg {
-						return len(fmt.Sprintf(boolArgFmt, argName, argName))
-					}
-					return len(fmt.Sprintf(generalArgFmt, argName, unifiedUsage))
-				}(),
-			)
-		}
-		argList = append(
-			argList,
-			fmt.Sprintf(
-				"%s  %s",
-				appendSpacesToLength(helpArg, maxArgLength), "print this message",
-			),
-		)
-		for _, a := range sortMap(arg) {
-			info := a.val
-			argName := a.key
-			argUsage := func() string {
-				unifiedUsage := argName
-				if info.usage != "" {
-					unifiedUsage = info.usage
-				}
-				if info.ty == boolArg {
-					return fmt.Sprintf(
-						"%s  %s",
-						appendSpacesToLength(
-							fmt.Sprintf(boolArgFmt, argName, argName),
-							maxArgLength,
-						),
-						fmt.Sprintf("set [%s] to true / false",
-							unifiedUsage,
-						),
-					)
-				}
-				return appendSpacesToLength(
-					fmt.Sprintf(generalArgFmt, argName, unifiedUsage),
-					maxArgLength,
-				)
-			}()
-
-			if info.defaultVal != nil {
-				defaultText := func() string {
-					if info.ty == boolArg {
-						return fmt.Sprintf(`[default: %s]`, *info.defaultVal)
-					}
-					return fmt.Sprintf(`[default: "%s"]`, *info.defaultVal)
-				}()
-				argUsage = fmt.Sprintf("%s  %s", argUsage, defaultText)
-			} else if info.example != nil {
-				// if argument has default value, users can learn how to
-				// input this argument by reading the default value, so we
-				// don't need to print an example.
-				argUsage = fmt.Sprintf(
-					"%s  %s",
-					argUsage,
-					fmt.Sprintf(`[example: "%s"]`, *info.example),
-				)
-			}
-
-			argList = append(argList, argUsage)
-		}
-	}
-
-	cmdList := []string{}
-	{
-		maxCmdLength := 0
-		for _, c := range sortMap(command) {
-			maxCmdLength = maxInt(maxCmdLength, len(c.key))
-		}
-		for _, c := range sortMap(command) {
-			cmd := c.key
-			info := c.val
-			cmdUsage := cmd
-			if info.usage != "" {
-				cmdUsage = fmt.Sprintf(
-					"%s  %s",
-					appendSpacesToLength(cmd, maxCmdLength),
-					info.usage,
-				)
-			}
-			cmdList = append(cmdList, cmdUsage)
-		}
-	}
-
-	usage := fmt.Sprintf("Usage: %s [OPTIONS]\n", viewNameChain)
-	if len(cmdList) > 0 {
-		usage = fmt.Sprintf("Usage: %s [OPTIONS] [COMMAND]\n", viewNameChain)
-		usage += fmt.Sprintf(
-			"\nCommands:\n%s\n", strings.Join(fmap(cmdList, shiftFour), "\n"),
-		)
-	}
-	// arg always have --help, thus not empty
-	usage += fmt.Sprintf("\nOptions:\n%s\n", strings.Join(fmap(argList, shiftFour), "\n"))
-	if len(cmdList) > 0 {
-		usage += fmt.Sprintf(
-			"\nRun `%s [COMMAND] -help` to print the help message of COMMAND\n\n",
-			viewNameChain,
-		)
-	}
-	return usage
+type cliInfo struct {
+	options  map[string]optionInfo
+	commands map[string]subcmdInfo
+	args     []optionInfo
 }
 
 func buildArgAndCommandList(
 	fieldChain string,
 	viewNameChain string,
 	structDef reflect.Type, argStructPtr reflect.Value,
-) (arg map[string]argInfo, command map[string]cmdInfo, err error) {
-	arg = make(map[string]argInfo)     // arguments list
-	command = make(map[string]cmdInfo) // commands list
+) (cmdInfo, error) {
+	// (options map[string]optionInfo, commands map[string]subcmdInfo, err error) {
+	baseCmd := newCmdInfo()
 
 	for i := 0; i < argStructPtr.NumField(); i++ {
 		defField := structDef.Field(i)
 		defName := defField.Name
-		flagName := defField.Tag.Get("flag")
-		if flagName == "" {
-			flagName = defName
+		optionName := defField.Tag.Get("flag") // for compatibility, use `flag`
+		if optionName == "" {
+			optionName = defName
 		}
+		argName := defField.Tag.Get("arg")
 		defaultVal := func(fieldDef reflect.StructField) *string {
 			defaultValStr, hasDefault := fieldDef.Tag.Lookup("default")
 			if hasDefault {
@@ -495,35 +554,54 @@ func buildArgAndCommandList(
 			}
 			return nil
 		}(defField)
+		valField := argStructPtr.Field(i)
+		currentFieldChain := fmt.Sprintf("%s.%s", fieldChain, defName)
+
+		isArg := argName != ""
+		cliName := func() string {
+			if argName != "" {
+				return argName
+			}
+			return optionName
+		}() // name used in cli
+
+		if isArg && defaultVal != nil {
+			// if it's argument, argument cannot be omitted and cannot
+			// have default values. Only option can have default values
+			return baseCmd, fmt.Errorf(
+				errArgHasDefault,
+				valField.Type(),
+				currentFieldChain,
+			)
+		}
+
 		usage := defField.Tag.Get("usage")
 
-		currentFieldChain := fmt.Sprintf("%s.%s", fieldChain, defName)
-		valField := argStructPtr.Field(i)
 		p, exampleCannotParse, e := hasCustomParser(valField)
 		if exampleCannotParse {
-			return arg, command, fmt.Errorf(
+			return baseCmd, fmt.Errorf(
 				errNotValidExample,
 				valField.Type(),
 				currentFieldChain,
 			)
 		}
 		if e == nil { // has implemented Parse
-			if arg, err = addArgument(
-				arg,
-				flagName,
-				argInfo{
-					parseFn:    p(valField),
-					fullName:   defName,
-					consumeLen: argLen,
-					ty:         valArg,
-					usage:      usage,
+			if err := baseCmd.AddArgOrOption(
+				cliName,
+				argOrOption{
+					isArg:   isArg,
+					defName: defName,
 
-					defaultVal: defaultVal,
+					parseFn:    p(valField),
+					usage:      usage,
 					example:    customExampleFor(valField),
+					ty:         valArg,
+					consumeLen: argLen,
+					defaultVal: defaultVal,
 				},
 				currentFieldChain,
 			); err != nil {
-				return nil, nil, err
+				return baseCmd, err
 			}
 		} else {
 			switch {
@@ -577,127 +655,135 @@ func buildArgAndCommandList(
 						}
 					}()
 				if err != nil {
-					return arg, command, fmt.Errorf(
+					return baseCmd, fmt.Errorf(
 						errNotImplParse,
 						ptrToElem.Type().Elem(),
 						currentFieldChain,
 					)
 				}
-				if arg, err = addArgument(
-					arg, flagName,
-					argInfo{
-						parseFn: func(s []string) (parseArgResult, error) {
-							str := strings.Join(s, "")
-							if str == "" {
-								return parseArgResult{
-									rv: reflect.MakeSlice(valField.Type(), 0, 0),
-								}, nil
-							}
-							strSlice := strings.Split(str, ",")
-							resultSlice := reflect.MakeSlice(
-								valField.Type(), len(strSlice), len(strSlice),
-							)
-							for i, si := range strSlice {
-								newElem := reflect.New(ptrToElem.Type().Elem()).Elem()
-								res, err := parseElemFn(newElem)([]string{si})
-								if err != nil {
-									return parseArgResult{}, err
-								}
-								resultSlice.Index(i).Set(res.rv)
-							}
-							return parseArgResult{rv: resultSlice}, nil
-						},
-						fullName:   defName,
-						consumeLen: argLen,
+
+				parseFn := func(s []string) (parseArgResult, error) {
+					str := strings.Join(s, "")
+					if str == "" {
+						return parseArgResult{
+							rv: reflect.MakeSlice(valField.Type(), 0, 0),
+						}, nil
+					}
+					strSlice := strings.Split(str, ",")
+					resultSlice := reflect.MakeSlice(
+						valField.Type(), len(strSlice), len(strSlice),
+					)
+					for i, si := range strSlice {
+						newElem := reflect.New(ptrToElem.Type().Elem()).Elem()
+						res, err := parseElemFn(newElem)([]string{si})
+						if err != nil {
+							return parseArgResult{}, err
+						}
+						resultSlice.Index(i).Set(res.rv)
+					}
+					return parseArgResult{rv: resultSlice}, nil
+				}
+				example := func(elemExample *string) *string {
+					if elemExample != nil {
+						res := fmt.Sprintf(
+							"%v,%v",
+							*elemExample, *elemExample,
+						)
+						return &res
+					}
+					return nil
+				}(elemExample)
+
+				if err := baseCmd.AddArgOrOption(
+					cliName,
+					argOrOption{
+						isArg:   isArg,
+						defName: defName,
+
+						parseFn:    parseFn,
+						usage:      usage,
+						example:    example,
 						ty:         valArg,
-
+						consumeLen: argLen,
 						defaultVal: defaultVal,
-						example: func(elemExample *string) *string {
-							if elemExample != nil {
-								res := fmt.Sprintf(
-									"%v,%v",
-									*elemExample, *elemExample,
-								)
-								return &res
-							}
-							return nil
-						}(elemExample),
-
-						usage: usage,
 					},
 					currentFieldChain,
 				); err != nil {
-					return nil, nil, err
+					return baseCmd, err
 				}
 			case valField.Type() == reflect.TypeOf(string("")):
-				if arg, err = addArgument(
-					arg,
-					flagName,
-					argInfo{
+				if err := baseCmd.AddArgOrOption(
+					cliName,
+					argOrOption{
+						isArg:   isArg,
+						defName: defName,
+
 						parseFn:    parseString,
-						fullName:   defName,
-						consumeLen: argLen,
-						ty:         valArg,
-						defaultVal: defaultVal,
 						usage:      usage,
+						ty:         valArg,
+						consumeLen: argLen,
+						defaultVal: defaultVal,
 					},
 					currentFieldChain,
 				); err != nil {
-					return nil, nil, err
+					return baseCmd, err
 				}
 			case valField.Type() == reflect.TypeOf(bool(false)):
-				if arg, err = addArgument(
-					arg,
-					flagName,
-					argInfo{
+				if err := baseCmd.AddArgOrOption(
+					cliName,
+					argOrOption{
+						isArg:   isArg,
+						defName: defName,
+
 						parseFn:    parseBool,
-						fullName:   defName,
-						consumeLen: boolArgLen,
-						ty:         boolArg,
-						defaultVal: defaultVal,
 						usage:      usage,
+						ty:         boolArg,
+						consumeLen: boolArgLen,
+						defaultVal: defaultVal,
 					},
 					currentFieldChain,
 				); err != nil {
-					return nil, nil, err
+					return baseCmd, err
 				}
 			case valField.Type() == reflect.TypeOf(int(0)):
-				if arg, err = addArgument(
-					arg,
-					flagName,
-					argInfo{
+				if err := baseCmd.AddArgOrOption(
+					cliName,
+					argOrOption{
+						isArg:   isArg,
+						defName: defName,
+
 						parseFn:    parseInt,
-						fullName:   defName,
-						consumeLen: argLen,
-						ty:         valArg,
-						defaultVal: defaultVal,
 						usage:      usage,
+						ty:         valArg,
+						consumeLen: argLen,
+						defaultVal: defaultVal,
 					},
 					currentFieldChain,
 				); err != nil {
-					return nil, nil, err
+					return baseCmd, err
 				}
 			case valField.Type() == reflect.TypeOf(float64(0)):
-				if arg, err = addArgument(
-					arg,
-					flagName,
-					argInfo{
+				if err := baseCmd.AddArgOrOption(
+					cliName,
+					argOrOption{
+						isArg:   isArg,
+						defName: defName,
+
 						parseFn:    parseFloat64,
-						fullName:   defName,
-						consumeLen: argLen,
-						ty:         valArg,
-						defaultVal: defaultVal,
 						usage:      usage,
+						ty:         valArg,
+						consumeLen: argLen,
+						defaultVal: defaultVal,
 					},
 					currentFieldChain,
 				); err != nil {
-					return nil, nil, err
+					return baseCmd, err
 				}
-			case valField.Kind() == reflect.Pointer:
+			case valField.Kind() == reflect.Pointer: // expect a sub-command definition
 				// should be *struct{...}
 				fieldType := valField.Type().Elem() // reflect.Type struct{...}
 				if fieldType.Kind() != reflect.Struct {
-					return arg, command, fmt.Errorf(
+					return baseCmd, fmt.Errorf(
 						errNotStructPtr,
 						valField.Type(),
 						currentFieldChain,
@@ -709,24 +795,21 @@ func buildArgAndCommandList(
 				// usage text of subcommands is not used
 				parseFn, _ := buildParseCmdFn(
 					currentFieldChain,
-					fmt.Sprintf("%s %s", viewNameChain, flagName),
+					fmt.Sprintf("%s %s", viewNameChain, optionName),
 					instance)
-				if command, err = addCommand(
-					command,
-					flagName,
-					cmdInfo{
-						parseFn:    parseFn,
-						fullName:   defName,
-						consumeLen: subcommandLen,
-						ty:         subcommand,
-						usage:      usage,
+				if err := baseCmd.AddCommand(
+					optionName,
+					subcmdInfo{
+						parseFn: parseFn,
+						defName: defName,
+						usage:   usage,
 					},
 					currentFieldChain,
 				); err != nil {
-					return nil, nil, err
+					return baseCmd, err
 				}
 			default:
-				return arg, command, fmt.Errorf(
+				return baseCmd, fmt.Errorf(
 					errNotImplParse,
 					valField.Type(),
 					currentFieldChain,
@@ -734,7 +817,7 @@ func buildArgAndCommandList(
 			}
 		}
 	}
-	return arg, command, nil
+	return baseCmd, nil
 }
 
 // customParser return parseFn for this specific r: reflect.Value
@@ -785,23 +868,21 @@ func customExampleFor(r reflect.Value) *string {
 	return &eg
 }
 
-func validateArgAndCommand(
-	fieldChain string, arg map[string]argInfo, _ map[string]cmdInfo,
-) error {
-	for flagName, info := range arg {
-		if flagName == "help" {
+func validateArgAndCommand(fieldChain string, cmd cmdInfo) error {
+	for optionName, info := range cmd.options {
+		if optionName == "help" {
 			return fmt.Errorf(
 				errHelpIsReserved,
-				fmt.Sprintf("%s.%s", fieldChain, info.fullName),
+				fmt.Sprintf("%s.%s", fieldChain, info.defName),
 			)
 		}
 		if info.defaultVal != nil {
-			_, err := arg[flagName].parseFn([]string{*info.defaultVal})
+			_, err := cmd.options[optionName].parseFn([]string{*info.defaultVal})
 			if err != nil {
 				return fmt.Errorf(
 					errParseDefault,
 					*info.defaultVal,
-					fmt.Sprintf("%s.%s", fieldChain, info.fullName),
+					fmt.Sprintf("%s.%s", fieldChain, info.defName),
 					err,
 				)
 			}
@@ -810,38 +891,112 @@ func validateArgAndCommand(
 	return nil
 }
 
-func addArgument(
-	arg map[string]argInfo,
-	flagName string,
-	argInfo argInfo,
-	field string, // original field
-) (map[string]argInfo, error) {
-	if _, ok := arg[flagName]; ok {
-		return arg, fmt.Errorf(
-			errArgRedefined,
-			flagName,
-			field,
-		)
-	}
-	arg[flagName] = argInfo
-	return arg, nil
+func (c *cmdInfo) HasSubcmds() bool {
+	return len(c.subcmds) > 0
 }
 
-func addCommand(
-	cmd map[string]cmdInfo,
+func (c *cmdInfo) HasArgs() bool {
+	return len(c.args) > 0
+}
+
+// Add argument or option
+func (c *cmdInfo) AddArgOrOption(name string, a argOrOption, field string) error {
+	if a.isArg {
+		if err := c.AddArg(
+			argInfo{
+				parseFn: a.parseFn,
+				cliName: name,
+				defName: a.defName,
+				usage:   a.usage,
+				example: a.example,
+			},
+			field,
+		); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if err := c.addOption(
+		name,
+		optionInfo{
+			parseFn:    a.parseFn,
+			defName:    a.defName,
+			consumeLen: a.consumeLen,
+			ty:         a.ty,
+			usage:      a.usage,
+
+			defaultVal: a.defaultVal,
+			example:    a.example,
+		},
+		field,
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *cmdInfo) addOption(
+	optionName string,
+	option optionInfo,
+	field string, // original field's definition name
+) error {
+	if _, ok := c.options[optionName]; ok {
+		return fmt.Errorf(errOptionRedefined, optionName, field)
+	}
+	c.options[optionName] = option
+	return nil
+}
+
+func (c *cmdInfo) AddArg(
+	arg argInfo,
+	field string, // original field's definition name
+) error {
+	if c.HasSubcmds() {
+		var cmdName string
+		var cmdInfo subcmdInfo
+		for cmdName, cmdInfo = range c.subcmds {
+			// just get one subcommand
+			break
+		}
+		return fmt.Errorf(
+			errBothArgAndCommand,
+			cmdName, arg.cliName,
+			cmdInfo.defName, field,
+		)
+	}
+	for _, existArg := range c.args {
+		if existArg.cliName == arg.cliName {
+			return fmt.Errorf(errArgRedefined, arg.cliName, field)
+		}
+	}
+	c.args = append(c.args, arg)
+	return nil
+}
+
+func (c *cmdInfo) AddCommand(
 	cmdName string,
-	cmdInfo cmdInfo,
+	subcmd subcmdInfo,
 	field string, // original field
-) (map[string]cmdInfo, error) {
-	if _, ok := cmd[cmdName]; ok {
-		return cmd, fmt.Errorf(
+) error {
+	if c.HasArgs() {
+		argName := c.args[0].cliName
+		argDefName := c.args[0].defName
+		return fmt.Errorf(
+			errBothArgAndCommand,
+			cmdName, argName,
+			field, argDefName,
+		)
+	}
+	if _, ok := c.subcmds[cmdName]; ok {
+		return fmt.Errorf(
 			errCmdRedefined,
 			cmdName,
 			field,
 		)
 	}
-	cmd[cmdName] = cmdInfo
-	return cmd, nil
+	c.subcmds[cmdName] = subcmd
+	return nil
 }
 
 func parseBool(s []string) (parseArgResult, error) {

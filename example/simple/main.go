@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/canoriz/scli"
@@ -19,8 +20,8 @@ type Arg struct {
 
 	// subcommands are defined by *struct{...} field
 	Add *struct {
-		All  bool   `flag:"a" default:"false" usage:"Add all files"`
-		File string `flag:"f" usage:"file to be added"`
+		All  bool     `flag:"a" default:"false" usage:"Add all files"`
+		File []string `arg:"FILE" usage:"file to be added"`
 	} `flag:"add" usage:"Add file contents to the index"`
 
 	Commit *struct{} `flag:"commit" usage:"Record changes to the repository"`
@@ -34,7 +35,14 @@ type Arg struct {
 func main() {
 	var arg Arg // init a empty argument struct
 
-	parser := scli.BuildParser(&arg)
+	parser := scli.BuildParser(&arg).Checker(
+		func(a Arg) error {
+			if a.Add == nil && a.Commit == nil && a.Push == nil {
+				return errors.New("at least one subcommand should be specified")
+			}
+			return nil
+		},
+	)
 	parser.Parse()
 	// if Parse() error, program exits
 
