@@ -109,6 +109,36 @@ Commands:
 	c1  cmd1
 	c2  cmd2
 `,
+	}, {
+		"test arg array",
+		func() string {
+			var s0 struct {
+				A0 int
+				A1 []string `usage:"file"`
+			}
+			return BuildParser(&s0).Help()
+		},
+		`[OPTIONS] <A0> [A1]..
+
+Arguments:
+	<A0>
+	[A1]  file  [example: "str"]
+`,
+	}, {
+		"test custom type arg array",
+		func() string {
+			var s0 struct {
+				A0 int
+				A1 []addr `usage:"ip:port"`
+			}
+			return BuildParser(&s0).Help()
+		},
+		`[OPTIONS] <A0> [A1]..
+
+Arguments:
+	<A0>
+	[A1]  ip:port  [example: "127.0.0.1:8000"]
+`,
 	}}
 )
 

@@ -16,7 +16,13 @@ func makeUsageText(viewNameChain string, cmd cmdInfo) string {
 	usage := fmt.Sprintf("Usage: %s [OPTIONS]", viewNameChain)
 	if cmd.HasArgs() {
 		for _, a := range cmd.args {
-			usage = fmt.Sprintf("%s <%s>", usage, a.cliName)
+			if a.defaultVal != nil {
+				usage = fmt.Sprintf("%s [%s]", usage, a.cliName)
+			} else if a.ty == sliceArg {
+				usage = fmt.Sprintf("%s [%s]..", usage, a.cliName)
+			} else {
+				usage = fmt.Sprintf("%s <%s>", usage, a.cliName)
+			}
 		}
 	}
 	if cmd.HasSubcmds() {
@@ -129,15 +135,17 @@ func makeArgUsageList(cmd cmdInfo) []string {
 				// if arg is optional, prints [ARG]
 				return fmt.Sprintf("[%s]", a.cliName)
 			}
+			if a.ty == sliceArg {
+				// if arg is slice
+				return fmt.Sprintf("[%s]", a.cliName)
+			}
 			// if arg is required, prints <ARG>
 			return fmt.Sprintf("<%s>", a.cliName)
 		}()
+
+		argUsage = appendSpacesToLength(argUsage, maxArgLength)
 		if a.usage != "" {
-			argUsage = fmt.Sprintf(
-				"%s  %s",
-				appendSpacesToLength(argUsage, maxArgLength),
-				a.usage,
-			)
+			argUsage = fmt.Sprintf("%s  %s", argUsage, a.usage)
 		}
 
 		if extraUsage, ok := makeDefaultOrExample(

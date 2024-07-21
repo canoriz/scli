@@ -88,6 +88,24 @@ var (
 		},
 		[]string{"error parsing default value"},
 	}, {
+		"wrong default",
+		func() {
+			var s0 struct {
+				Float1 float64 `flag:"f" default:"-19.x923"`
+			}
+			BuildParser(&s0)
+		},
+		[]string{"error parsing default value"},
+	}, {
+		"wrong default",
+		func() {
+			var s0 struct {
+				I []invalidExample `flag:"f"`
+			}
+			BuildParser(&s0)
+		},
+		[]string{"Example()", "cannot parsed by FromString(..)"},
+	}, {
 		"unexported field",
 		func() {
 			var s0 struct {
@@ -268,6 +286,45 @@ var (
 			BuildParser(&s0)
 		},
 		[]string{"error parsing default value"},
+	}, {
+		"multiple slice arg",
+		func() {
+			var s0 struct {
+				V0 []string
+				V1 []string
+			}
+			BuildParser(&s0)
+		},
+		[]string{"more than one slice type argument"},
+	}, {
+		"arg after slice",
+		func() {
+			var s0 struct {
+				V0 []string
+				V1 string
+			}
+			BuildParser(&s0)
+		},
+		[]string{"cannot define argument after slice argument"},
+	}, {
+		"optional arg slice",
+		func() {
+			var s0 struct {
+				V0 []string `arg:"v0" default:"a b"`
+			}
+			BuildParser(&s0)
+		},
+		[]string{"slice argument cannot have default value"},
+	}, {
+		"optional arg slice",
+		func() {
+			var s0 struct {
+				A0 int `default:"3"`
+				V0 []string
+			}
+			BuildParser(&s0)
+		},
+		[]string{"cannot define slice argument after optional"},
 	}}
 
 	parseErrorCase = []struct {
@@ -361,7 +418,7 @@ var (
 		"xx xx",
 		[]string{"error parsing positional argument"},
 	}, {
-		"slice parse error",
+		"slice option parse error",
 		func(input string) error {
 			var s0 struct {
 				S []addr `flag:"s"`
@@ -371,6 +428,17 @@ var (
 		},
 		"-s 14$3",
 		[]string{"error parsing argument of option"},
+	}, {
+		"arg option parse error",
+		func(input string) error {
+			var s0 struct {
+				S []int
+			}
+			_, err := BuildParser(&s0).ParseArg(input)
+			return err
+		},
+		"11 14$3",
+		[]string{"error parsing positional argument"},
 	}, {
 		"missing arg",
 		func(input string) error {
@@ -490,12 +558,8 @@ var (
 				B2 bool    `arg:"b2"`
 				F3 float64 `arg:"f3"`
 
-				SS0 []string  `arg:"ss0"`
-				SI1 []int     `arg:"ii1"`
-				SB2 []bool    `arg:"bb2"`
-				SF3 []float64 `arg:"ff3"`
-
-				C0 addr `arg:"c0"`
+				C0  addr     `arg:"c0"`
+				SS0 []string `arg:"ss0"`
 			}
 			var s0 ty
 			s1 := ty{
@@ -504,19 +568,14 @@ var (
 				B2: false,
 				F3: -1.2345,
 
-				SS0: []string{"a00"},
-				SI1: []int{42, 43},
-				SB2: []bool{false, true},
-				SF3: []float64{1, -1.2345},
-
 				C0: addr{
 					ip:   "127.0.0.1",
 					port: "3000",
 				},
+				SS0: []string{"a3", "a4"},
 			}
 			_, err := BuildParser(&s0).ParseArg(
-				"a00 42 false -1.2345 a00 42,43 0,true 1,-1.2345" +
-					" 127.0.0.1:3000",
+				"a00 42 false -1.2345 127.0.0.1:3000 a3 a4",
 			)
 			return s0, s1, err
 		},
@@ -575,21 +634,110 @@ var (
 			_, err := BuildParser(&s0).ParseArg("s00 s11 s22")
 			return s0, s1, err
 		},
-	},
-	// }, {
-	// 	"parse arg array",
-	// 	func() (any, any, error) {
-	// 		type ty struct {
-	// 			A0 []string `arg:"a0"`
-	// 		}
-	// 		var s0 ty
-	// 		s1 := ty{
-	// 			A0: []string{"a00", "-a11"},
-	// 		}
-	// 		_, err := BuildParser(&s0).ParseArg("a00 -a11")
-	// 		return s0, s1, err
-	// 	},
-	}
+	}, {
+		"parse arg []string",
+		func() (any, any, error) {
+			type ty struct {
+				A0 string
+				A1 []string
+			}
+			var s0 ty
+			s1 := ty{
+				A0: "a00",
+				A1: []string{"a00", "-a11"},
+			}
+			_, err := BuildParser(&s0).ParseArg("a00 a00 -a11")
+			return s0, s1, err
+		},
+	}, {
+		"parse arg []int",
+		func() (any, any, error) {
+			type ty struct {
+				A1 []int
+			}
+			var s0 ty
+			s1 := ty{
+				A1: []int{0, 1, 2},
+			}
+			_, err := BuildParser(&s0).ParseArg("0 1 2")
+			return s0, s1, err
+		},
+	}, {
+		"parse arg []bool",
+		func() (any, any, error) {
+			type ty struct {
+				A1 []bool
+			}
+			var s0 ty
+			s1 := ty{
+				A1: []bool{false, false, true, true},
+			}
+			_, err := BuildParser(&s0).ParseArg("false F T 1")
+			return s0, s1, err
+		},
+	}, {
+		"parse arg []float64",
+		func() (any, any, error) {
+			type ty struct {
+				A1 []float64
+			}
+			var s0 ty
+			s1 := ty{
+				A1: []float64{-1.5, -1.3, 1.5, 1.1},
+			}
+			_, err := BuildParser(&s0).ParseArg("-1.5 -1.3 1.5 1.1")
+			return s0, s1, err
+		},
+	}, {
+		"parse arg []addr",
+		func() (any, any, error) {
+			type ty struct {
+				A1 []addr
+			}
+			var s0 ty
+			s1 := ty{
+				A1: []addr{{
+					ip:   "127.0.0.1",
+					port: "1000",
+				}, {
+					ip:   "127.0.0.2",
+					port: "1001",
+				}},
+			}
+			_, err := BuildParser(&s0).ParseArg(" 127.0.0.1:1000  127.0.0.2:1001 ")
+			return s0, s1, err
+		},
+	}, {
+		"parse empty arg array",
+		func() (any, any, error) {
+			type ty struct {
+				A0 string
+				A1 []string
+			}
+			var s0 ty
+			s1 := ty{
+				A0: "a00",
+				A1: nil,
+			}
+			_, err := BuildParser(&s0).ParseArg("a00")
+			return s0, s1, err
+		},
+	}, {
+		"parse empty arg array",
+		func() (any, any, error) {
+			type ty struct {
+				A0 string
+				A1 []addr
+			}
+			var s0 ty
+			s1 := ty{
+				A0: "a00",
+				A1: nil,
+			}
+			_, err := BuildParser(&s0).ParseArg("a00")
+			return s0, s1, err
+		},
+	}}
 )
 
 func TestPanic(t *testing.T) {

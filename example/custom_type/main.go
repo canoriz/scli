@@ -42,13 +42,13 @@ type Arg struct {
 		Name string `flag:"n"  usage:"add file"`
 		B    bool   `flag:"b"`
 		High *struct {
-			Name string `flag:"n" default:"no" usage:"name"`
+			Name  string `flag:"n" default:"no" usage:"name"`
+			SAddr []addr
 		} `flag:"high"`
 	} `flag:"add"`
 	Delete *struct {
 		Name int `flag:"n" usage:"delete file"`
 	}
-	SAddr []addr
 }
 
 func main() {

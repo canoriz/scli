@@ -34,6 +34,12 @@ const ( // build time errors
 		"at field %s"
 	errArgNoDefault = "positional argument type %s at field %s requires a default value " +
 		"because a previous argument has default value"
+	errSliceArgHasDefault = "slice argument cannot have default value: argument %s at field %s"
+	errMultipleArgSlice   = `more than one slice type argument: %s at field %s`
+	errArgAfterSlice      = `cannot define argument after slice argument: %s at field %s`
+
+	errSliceArgAfterDefaultArg = "cannot define slice argument after optional(has default)" +
+		" argument: %s at field %s"
 )
 
 const ( // runtime errors
@@ -176,6 +182,7 @@ func checkType(u any) error {
 }
 
 const (
+	// TODO: use map[kwType]?
 	boolArgLen    = 1
 	argLen        = 2
 	subcommandLen = 1
@@ -186,6 +193,7 @@ type kwType int
 const (
 	boolArg kwType = iota
 	valArg
+	sliceArg
 )
 
 // cmdInfo contains general information of a command
@@ -338,8 +346,24 @@ func buildParseCmdFn(
 				usage: helpText,
 			}
 		}
-		// TODO: []T arguments splitted by space
+
 		t := cmd.args[argNumber]
+		if t.ty == sliceArg {
+			r, err := t.parseFn(input)
+			if err != nil {
+				return input, &parseCmdError{
+					err: fmt.Errorf(
+						errParsePositonalArg,
+						t.cliName, strings.Join(input, " "), err,
+					),
+					usage: helpText,
+				}
+			}
+			argStructPtr.FieldByName(t.defName).Set(r.rv)
+			return []string{}, nil // slice arg consumes all input
+		}
+
+		// argument is not slice
 		r, err := t.parseFn([]string{first})
 		if err != nil {
 			return input, &parseCmdError{
@@ -438,8 +462,6 @@ func buildParseCmdFn(
 				input = remain
 				argsProcessed++
 			} else {
-				// this is not a valid option, nor a valid argument (or no argument)
-				// TODO: what error should say?
 				break
 			}
 		}
@@ -479,6 +501,8 @@ func buildParseCmdFn(
 						)
 					}
 					argStructPtr.FieldByName(arg.defName).Set(r.rv)
+				} else if arg.ty == sliceArg {
+					// sliceArg can be omitted to represent empty slice
 				} else {
 					return parseCmdResult{}, &parseCmdError{
 						err: fmt.Errorf(
@@ -556,7 +580,6 @@ func buildArgAndCommandList(
 	// (options map[string]optionInfo, commands map[string]subcmdInfo, err error) {
 	baseCmd := newCmdInfo()
 
-	argRequireDefault := false
 	for i := 0; i < argStructPtr.NumField(); i++ {
 		defField := structDef.Field(i)
 		defName := defField.Name
@@ -581,17 +604,6 @@ func buildArgAndCommandList(
 			}
 			return true, argName
 		}() // name used in cli
-
-		if isArg && argRequireDefault && defaultVal == nil {
-			return baseCmd, fmt.Errorf(
-				errArgNoDefault,
-				valField.Type(),
-				currentFieldChain,
-			)
-		}
-		if isArg && defaultVal != nil {
-			argRequireDefault = true
-		}
 
 		usage := defField.Tag.Get("usage")
 
@@ -673,44 +685,67 @@ func buildArgAndCommandList(
 						}
 					}()
 				if err != nil {
-					return baseCmd, fmt.Errorf(
-						errNotImplParse,
-						ptrToElem.Type().Elem(),
-						currentFieldChain,
-					)
+					return baseCmd, err
 				}
 
-				parseFn := func(s []string) (parseArgResult, error) {
-					str := strings.Join(s, "")
-					if str == "" {
-						return parseArgResult{
-							rv: reflect.MakeSlice(valField.Type(), 0, 0),
-						}, nil
-					}
-					strSlice := strings.Split(str, ",")
-					resultSlice := reflect.MakeSlice(
-						valField.Type(), len(strSlice), len(strSlice),
-					)
-					for i, si := range strSlice {
-						newElem := reflect.New(ptrToElem.Type().Elem()).Elem()
-						res, err := parseElemFn(newElem)([]string{si})
-						if err != nil {
-							return parseArgResult{}, err
+				parseFn, example := func() (parseArgFn, *string) {
+					if isArg {
+						parseFn := func(s []string) (parseArgResult, error) {
+							// slice argument are passed seperated by space
+							if len(s) == 0 {
+								return parseArgResult{
+									rv: reflect.MakeSlice(valField.Type(), 0, 0),
+								}, nil
+							}
+							resultSlice := reflect.MakeSlice(
+								valField.Type(), len(s), len(s),
+							)
+							for i, si := range s {
+								newElem := reflect.New(ptrToElem.Type().Elem()).Elem()
+								res, err := parseElemFn(newElem)([]string{si})
+								if err != nil {
+									return parseArgResult{}, err
+								}
+								resultSlice.Index(i).Set(res.rv)
+							}
+							return parseArgResult{rv: resultSlice}, nil
 						}
-						resultSlice.Index(i).Set(res.rv)
+						return parseFn, elemExample
+					} else {
+						parseFn := func(s []string) (parseArgResult, error) {
+							str := strings.Join(s, "")
+							if str == "" {
+								return parseArgResult{
+									rv: reflect.MakeSlice(valField.Type(), 0, 0),
+								}, nil
+							}
+							strSlice := strings.Split(str, ",")
+							resultSlice := reflect.MakeSlice(
+								valField.Type(), len(strSlice), len(strSlice),
+							)
+							for i, si := range strSlice {
+								newElem := reflect.New(ptrToElem.Type().Elem()).Elem()
+								res, err := parseElemFn(newElem)([]string{si})
+								if err != nil {
+									return parseArgResult{}, err
+								}
+								resultSlice.Index(i).Set(res.rv)
+							}
+							return parseArgResult{rv: resultSlice}, nil
+						}
+						example := func(elemExample *string) *string {
+							if elemExample != nil {
+								res := fmt.Sprintf(
+									"%v,%v,...",
+									*elemExample, *elemExample,
+								)
+								return &res
+							}
+							return nil
+						}(elemExample)
+						return parseFn, example
 					}
-					return parseArgResult{rv: resultSlice}, nil
-				}
-				example := func(elemExample *string) *string {
-					if elemExample != nil {
-						res := fmt.Sprintf(
-							"%v,%v",
-							*elemExample, *elemExample,
-						)
-						return &res
-					}
-					return nil
-				}(elemExample)
+				}()
 
 				if err := baseCmd.AddArgOrOption(
 					cliName,
@@ -721,8 +756,8 @@ func buildArgAndCommandList(
 						parseFn:    parseFn,
 						usage:      usage,
 						example:    example,
-						ty:         valArg,
-						consumeLen: argLen,
+						ty:         sliceArg,
+						consumeLen: argLen, // only option use this length
 						defaultVal: defaultVal,
 					},
 					currentFieldChain,
@@ -999,9 +1034,26 @@ func (c *cmdInfo) AddArg(
 			cmdInfo.defName, field,
 		)
 	}
+
+	if arg.defaultVal != nil && arg.ty == sliceArg {
+		return fmt.Errorf(errSliceArgHasDefault, arg.cliName, field)
+	}
+
 	for _, existArg := range c.args {
 		if existArg.cliName == arg.cliName {
 			return fmt.Errorf(errArgRedefined, arg.cliName, field)
+		}
+		if existArg.defaultVal != nil && arg.ty == sliceArg {
+			return fmt.Errorf(errSliceArgAfterDefaultArg, arg.cliName, field)
+		}
+		if arg.ty == sliceArg && existArg.ty == sliceArg {
+			return fmt.Errorf(errMultipleArgSlice, arg.cliName, field)
+		}
+		if arg.defaultVal == nil && existArg.defaultVal != nil {
+			return fmt.Errorf(errArgNoDefault, arg.cliName, field)
+		}
+		if existArg.ty == sliceArg {
+			return fmt.Errorf(errArgAfterSlice, arg.cliName, field)
 		}
 	}
 	c.args = append(c.args, arg)
