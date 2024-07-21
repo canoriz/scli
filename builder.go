@@ -542,11 +542,6 @@ func buildArgAndCommandList(
 	for i := 0; i < argStructPtr.NumField(); i++ {
 		defField := structDef.Field(i)
 		defName := defField.Name
-		optionName := defField.Tag.Get("flag") // for compatibility, use `flag`
-		if optionName == "" {
-			optionName = defName
-		}
-		argName := defField.Tag.Get("arg")
 		defaultVal := func(fieldDef reflect.StructField) *string {
 			defaultValStr, hasDefault := fieldDef.Tag.Lookup("default")
 			if hasDefault {
@@ -557,12 +552,16 @@ func buildArgAndCommandList(
 		valField := argStructPtr.Field(i)
 		currentFieldChain := fmt.Sprintf("%s.%s", fieldChain, defName)
 
-		isArg := argName != ""
-		cliName := func() string {
-			if argName != "" {
-				return argName
+		isArg, cliName := func() (bool, string) {
+			optionName := defField.Tag.Get("flag") // for compatibility, use `flag`
+			argName := defField.Tag.Get("arg")
+			if argName == "" {
+				argName = defName
 			}
-			return optionName
+			if optionName != "" {
+				return false, optionName
+			}
+			return true, argName
 		}() // name used in cli
 
 		if isArg && defaultVal != nil {
@@ -795,10 +794,10 @@ func buildArgAndCommandList(
 				// usage text of subcommands is not used
 				parseFn, _ := buildParseCmdFn(
 					currentFieldChain,
-					fmt.Sprintf("%s %s", viewNameChain, optionName),
+					fmt.Sprintf("%s %s", viewNameChain, cliName),
 					instance)
 				if err := baseCmd.AddCommand(
-					optionName,
+					cliName,
 					subcmdInfo{
 						parseFn: parseFn,
 						defName: defName,
