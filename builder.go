@@ -32,7 +32,8 @@ const ( // build time errors
 		"or type `Parse` to represent a custom type"
 	errNotValidExample = "Example() of custom type *%s cannot parsed by FromString(..) " +
 		"at field %s"
-	errArgHasDefault = "positional argument does not allow default value, type %s at field %s"
+	errArgNoDefault = "positional argument type %s at field %s requires a default value " +
+		"because a previous argument has default value"
 )
 
 const ( // runtime errors
@@ -44,7 +45,7 @@ const ( // runtime errors
 	errParsePositonalArg = `error parsing positional argument "%s" value %s, error: %w`
 	errTooManyArgs       = `error parsing positional argument: too many args, expect %d, given %d args`
 	errOptionNotFound    = `option "--%s" is required in "%s" but not provided`
-	errArgNotFound       = `expect %v argument(s) but only %v provided (in definition %s)`
+	errArgNotFound       = `argument <%s> is required in "%s" but not provided`
 )
 
 func maxInt(a, b int) int {
@@ -222,8 +223,11 @@ type argInfo struct {
 	cliName string // argument name in CLI
 	parseFn parseArgFn
 	defName string // name of field in struct definition
+	ty      kwType // type of argument
 	usage   string
-	example *string // non-nil if argument is a custom type
+
+	defaultVal *string // non-nil if argument has a default value
+	example    *string // non-nil if argument is a custom type
 }
 
 // define argOrOption to make call simpler
@@ -460,17 +464,30 @@ func buildParseCmdFn(
 				}
 			}
 		}
+
 		// check all arguments are given
 		// if struct did not define argument, cmd.args will be empty
 		// below check will pass
-		if cmd.HasArgs() && argsProcessed < len(cmd.args) {
-			return parseCmdResult{}, &parseCmdError{
-				err: fmt.Errorf(
-					errArgNotFound,
-					len(cmd.args), argsProcessed,
-					viewNameChain,
-				),
-				usage: helpText,
+		if cmd.HasArgs() {
+			for _, arg := range cmd.args[argsProcessed:] {
+				if arg.defaultVal != nil {
+					r, err := arg.parseFn([]string{*arg.defaultVal})
+					if err != nil {
+						panic(
+							"default values are validated before. " +
+								"Cannot parse error at parse",
+						)
+					}
+					argStructPtr.FieldByName(arg.defName).Set(r.rv)
+				} else {
+					return parseCmdResult{}, &parseCmdError{
+						err: fmt.Errorf(
+							errArgNotFound,
+							arg.cliName, viewNameChain,
+						),
+						usage: helpText,
+					}
+				}
 			}
 		}
 
@@ -539,6 +556,7 @@ func buildArgAndCommandList(
 	// (options map[string]optionInfo, commands map[string]subcmdInfo, err error) {
 	baseCmd := newCmdInfo()
 
+	argRequireDefault := false
 	for i := 0; i < argStructPtr.NumField(); i++ {
 		defField := structDef.Field(i)
 		defName := defField.Name
@@ -564,14 +582,15 @@ func buildArgAndCommandList(
 			return true, argName
 		}() // name used in cli
 
-		if isArg && defaultVal != nil {
-			// if it's argument, argument cannot be omitted and cannot
-			// have default values. Only option can have default values
+		if isArg && argRequireDefault && defaultVal == nil {
 			return baseCmd, fmt.Errorf(
-				errArgHasDefault,
+				errArgNoDefault,
 				valField.Type(),
 				currentFieldChain,
 			)
+		}
+		if isArg && defaultVal != nil {
+			argRequireDefault = true
 		}
 
 		usage := defField.Tag.Get("usage")
@@ -887,6 +906,19 @@ func validateArgAndCommand(fieldChain string, cmd cmdInfo) error {
 			}
 		}
 	}
+	for _, arg := range cmd.args {
+		if arg.defaultVal != nil {
+			_, err := arg.parseFn([]string{*arg.defaultVal})
+			if err != nil {
+				return fmt.Errorf(
+					errParseDefault,
+					*arg.defaultVal,
+					fmt.Sprintf("%s.%s", fieldChain, arg.defName),
+					err,
+				)
+			}
+		}
+	}
 	return nil
 }
 
@@ -907,7 +939,10 @@ func (c *cmdInfo) AddArgOrOption(name string, a argOrOption, field string) error
 				cliName: name,
 				defName: a.defName,
 				usage:   a.usage,
+				ty:      a.ty,
 				example: a.example,
+
+				defaultVal: a.defaultVal,
 			},
 			field,
 		); err != nil {

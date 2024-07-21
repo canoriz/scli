@@ -104,31 +104,11 @@ func makeOptionUsageList(cmd cmdInfo) []string {
 			)
 		}()
 
-		if info.defaultVal != nil {
-			defaultText := func() string {
-				if info.ty == boolArg {
-					// default value of bool type can be T, F, 0, 1, true, false
-					// for consistency, only print true/falue in help message
-					// default value among {T, 1, true} will print true
-					// {F, 0, false} will print false
-					// all default value is verified before, always success
-					b, _ := strconv.ParseBool(*info.defaultVal)
-					return fmt.Sprintf(`[default: %v]`, b)
-				}
-				return fmt.Sprintf(`[default: "%s"]`, *info.defaultVal)
-			}()
-			argUsage = fmt.Sprintf("%s  %s", argUsage, defaultText)
-		} else if info.example != nil {
-			// if argument has default value, users can learn how to
-			// input this argument by reading the default value, so we
-			// don't need to print an example.
-			argUsage = fmt.Sprintf(
-				"%s  %s",
-				argUsage,
-				fmt.Sprintf(`[example: "%s"]`, *info.example),
-			)
+		if extraUsage, ok := makeDefaultOrExample(
+			info.ty, info.defaultVal, info.example,
+		); ok {
+			argUsage = fmt.Sprintf("%s  %s", argUsage, extraUsage)
 		}
-
 		optionUsageList = append(optionUsageList, argUsage)
 	}
 	return optionUsageList
@@ -144,13 +124,26 @@ func makeArgUsageList(cmd cmdInfo) []string {
 		)
 	}
 	for _, a := range cmd.args {
-		argUsage := fmt.Sprintf("<%s>", a.cliName)
+		argUsage := func() string {
+			if a.defaultVal != nil {
+				// if arg is optional, prints [ARG]
+				return fmt.Sprintf("[%s]", a.cliName)
+			}
+			// if arg is required, prints <ARG>
+			return fmt.Sprintf("<%s>", a.cliName)
+		}()
 		if a.usage != "" {
 			argUsage = fmt.Sprintf(
 				"%s  %s",
 				appendSpacesToLength(argUsage, maxArgLength),
 				a.usage,
 			)
+		}
+
+		if extraUsage, ok := makeDefaultOrExample(
+			a.ty, a.defaultVal, a.example,
+		); ok {
+			argUsage = fmt.Sprintf("%s  %s", argUsage, extraUsage)
 		}
 		argsUsageList = append(argsUsageList, argUsage)
 	}
@@ -177,6 +170,30 @@ func makeSubcmdUsageList(cmd cmdInfo) []string {
 		subcmdUsageList = append(subcmdUsageList, cmdUsage)
 	}
 	return subcmdUsageList
+}
+
+func makeDefaultOrExample(
+	ty kwType, // type of argument
+	defaultVal *string, example *string,
+) (_extraUsage string, _ok bool) {
+	if defaultVal != nil {
+		if ty == boolArg {
+			// default value of bool type can be T, F, 0, 1, true, false
+			// for consistency, only print true/falue in help message
+			// default value among {T, 1, true} will print true
+			// {F, 0, false} will print false
+			// all default value is verified before, always success
+			b, _ := strconv.ParseBool(*defaultVal)
+			return fmt.Sprintf(`[default: %v]`, b), true
+		}
+		return fmt.Sprintf(`[default: "%s"]`, *defaultVal), true
+	} else if example != nil {
+		// if argument has default value, users can learn how to
+		// input this argument by reading the default value, so we
+		// don't need to print an example.
+		return fmt.Sprintf(`[example: "%s"]`, *example), true
+	}
+	return "", false
 }
 
 func shiftFour(s string) string {

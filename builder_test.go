@@ -248,14 +248,26 @@ var (
 		},
 		[]string{"both defined"}, // TODO: more specific error
 	}, {
-		"argument has default",
+		"required argument after default argument",
 		func() {
 			var s0 struct {
-				V0 int `arg:"v" default:"1"`
+				V0 int `arg:"v0"`
+				V1 int `arg:"v1" default:"1"`
+				V2 int `arg:"v2"`
 			}
 			BuildParser(&s0)
 		},
-		[]string{"positional argument does not allow default value"},
+		[]string{"positional argument", "requires a default value"},
+	}, {
+		"arg default can not parse",
+		func() {
+			var s0 struct {
+				V0 int `arg:"v0"`
+				V1 int `arg:"v1" default:"1.33"`
+			}
+			BuildParser(&s0)
+		},
+		[]string{"error parsing default value"},
 	}}
 
 	parseErrorCase = []struct {
@@ -274,7 +286,7 @@ var (
 			return err
 		},
 		"-r2 4",
-		[]string{"is required", "option", "but not provided"},
+		[]string{`option "--r1" is required`, "but not provided"},
 	}, {
 		"option no value",
 		func(input string) error {
@@ -370,7 +382,7 @@ var (
 			return err
 		},
 		"only-a0",
-		[]string{"expect 2 argument"},
+		[]string{"argument <a1> is required", "but not provided"},
 	}, {
 		"too many arg",
 		func(input string) error {
@@ -482,6 +494,8 @@ var (
 				SI1 []int     `arg:"ii1"`
 				SB2 []bool    `arg:"bb2"`
 				SF3 []float64 `arg:"ff3"`
+
+				C0 addr `arg:"c0"`
 			}
 			var s0 ty
 			s1 := ty{
@@ -494,9 +508,15 @@ var (
 				SI1: []int{42, 43},
 				SB2: []bool{false, true},
 				SF3: []float64{1, -1.2345},
+
+				C0: addr{
+					ip:   "127.0.0.1",
+					port: "3000",
+				},
 			}
 			_, err := BuildParser(&s0).ParseArg(
-				"a00 42 false -1.2345 a00 42,43 0,true 1,-1.2345",
+				"a00 42 false -1.2345 a00 42,43 0,true 1,-1.2345" +
+					" 127.0.0.1:3000",
 			)
 			return s0, s1, err
 		},
@@ -534,6 +554,27 @@ var (
 			_, err := BuildParser(&s0).ParseArg("-op2 -op2")
 			return s0, s1, err
 		},
+	}, {
+		"default value arg",
+		func() (any, any, error) {
+			type ty struct {
+				S0  string `arg:"s0"`
+				S1  string `arg:"s1"`
+				S2  string `arg:"s2" default:"s2"`
+				S3  string `arg:"s3" default:"s3"`
+				Op2 int    `flag:"op2" default:"42"`
+			}
+			var s0 ty
+			s1 := ty{
+				S0:  "s00",
+				S1:  "s11",
+				S2:  "s22",
+				S3:  "s3",
+				Op2: 42,
+			}
+			_, err := BuildParser(&s0).ParseArg("s00 s11 s22")
+			return s0, s1, err
+		},
 	},
 	// }, {
 	// 	"parse arg array",
@@ -558,6 +599,23 @@ func TestPanic(t *testing.T) {
 				r := recover()
 				if r == nil {
 					t.Fatal("The code did not panic")
+				}
+				errStr := func() string {
+					if s, ok := r.(string); ok {
+						return s
+					}
+					if s, ok := r.(error); ok {
+						return s.Error()
+					}
+					return "failed"
+				}()
+				for _, expectStr := range c.expErr {
+					if !strings.Contains(errStr, expectStr) {
+						t.Fatalf(
+							"panic \n%s\ndoes not contain expected substr\n%s",
+							errStr, expectStr,
+						)
+					}
 				}
 				t.Log(r)
 			}()

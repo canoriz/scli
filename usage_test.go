@@ -58,6 +58,27 @@ Options:
 	-help, --help  print this message
 `,
 	}, {
+		"test optional argument",
+		func() string {
+			var s0 struct {
+				A0 string `arg:"a0" usage:"arg 0"`
+				A1 string `arg:"a1111" default:"11" usage:"arg 1"`
+				A2 string `arg:"a2" default:"22" usage:"arg 2"`
+				A3 bool   `arg:"a3" default:"false" usage:"arg 3"`
+			}
+			return BuildParser(&s0).Help()
+		},
+		`
+Arguments:
+	<a0>     arg 0
+	[a1111]  arg 1  [default: "11"]
+	[a2]     arg 2  [default: "22"]
+	[a3]     arg 3  [default: false]
+
+Options:
+	-help, --help  print this message
+`,
+	}, {
 		"test option align",
 		func() string {
 			var s0 struct {
