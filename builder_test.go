@@ -40,6 +40,30 @@ func (w *invalidExample) Example() string {
 	return "error"
 }
 
+type allowInvalidExample struct {
+	ip string
+}
+
+func (w *allowInvalidExample) FromString(s string) error {
+	if s == "error" {
+		return errors.New("can not be error")
+	}
+	w.ip = s
+	return nil
+}
+
+func (w *allowInvalidExample) Example() string {
+	return "error"
+}
+
+func (w *allowInvalidExample) AllowInvalidExample() {}
+
+var (
+	// type checker
+	_ Parse    = &invalidExample{}
+	_ ParseExt = &allowInvalidExample{}
+)
+
 type stringAlias string
 
 func (sa *stringAlias) FromString(s string) error {
@@ -733,6 +757,19 @@ var (
 			s1 := ty{
 				A0: "a00",
 				A1: nil,
+			}
+			_, err := BuildParser(&s0).ParseArg("a00")
+			return s0, s1, err
+		},
+	}, {
+		"allow invalid example",
+		func() (any, any, error) {
+			type ty struct {
+				A0 allowInvalidExample
+			}
+			var s0 ty
+			s1 := ty{
+				A0: allowInvalidExample{"a00"},
 			}
 			_, err := BuildParser(&s0).ParseArg("a00")
 			return s0, s1, err

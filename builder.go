@@ -15,6 +15,31 @@ type Parse interface {
 	Example() string
 }
 
+// Interface for types thar are Parse, but t.FromString(t.Example()) will return error.
+// A real usage of invalid Example() would be ConfigFile type. ConfigFile.FromString
+// will take a path of file then read the content of file into the struct, and Example()
+// returns a example of file path. Since the file that path points to probably does not
+// exist, FromString(Example()) will fail.
+//
+// The difference of Parse and ParseExt in the case of ConfigFile type is that the
+// value of config file is not parsed from input string, but read from the file the
+// input string points to. There is a layer of indirection. Whereas for type Addr
+// the input string "host:port" is enough, no indirection, so Addr.Example() should
+// not fail.
+//
+// NOTE: There are many ways to allow invalid Example(). Defining something like
+//
+//	type ParseX interface {
+//		FromString(s string) error
+//		ExampleX() string // X means FromString() will fail
+//	}
+//
+// also works. but I have no idea which one has a clear advantange.
+type ParseExt interface {
+	Parse
+	AllowInvalidExample()
+}
+
 var (
 	ErrIsHelp = errors.New("argument is help message")
 )
@@ -31,7 +56,8 @@ const ( // build time errors
 	errNotStructPtr = "type %v of field %s must be *struct{...} to represent a subcommand, " +
 		"or type `Parse` to represent a custom type"
 	errNotValidExample = "Example() of custom type *%s cannot parsed by FromString(..) " +
-		"at field %s"
+		"at field %s. If you are sure parsing Example() may fail and it is AS EXPECTED, " +
+		"consider furfilling ParseExt interface"
 	errArgNoDefault = "positional argument type %s at field %s requires a default value " +
 		"because a previous argument has default value"
 	errSliceArgHasDefault = "slice argument cannot have default value: argument %s at field %s"
@@ -886,7 +912,8 @@ func hasCustomParser(r reflect.Value) (
 			fmt.Errorf("can not addr type %v", r.Type())
 	}
 	if parse, ok := r.Addr().Interface().(Parse); ok {
-		if parse.FromString(parse.Example()) != nil {
+		_, isParseExt := parse.(ParseExt)
+		if !isParseExt && parse.FromString(parse.Example()) != nil {
 			return customParser, true,
 				fmt.Errorf("example of %v cannot parse", r.Type())
 		}
