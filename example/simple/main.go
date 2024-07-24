@@ -30,6 +30,10 @@ type Arg struct {
 	Push *struct {
 		Origin *struct{} `flag:"origin" usage:"Push to origin"`
 	} `flag:"push" usage:"Push to remote repository"`
+
+	Config *struct {
+		File scli.File[map[string]any, scli.EnableLiveUpdate]
+	}
 }
 
 func main() {
@@ -37,7 +41,7 @@ func main() {
 
 	parser := scli.BuildParser(&arg).Checker(
 		func(a Arg) error {
-			if a.Add == nil && a.Commit == nil && a.Push == nil {
+			if a.Add == nil && a.Commit == nil && a.Push == nil && a.Config == nil {
 				return errors.New("at least one subcommand should be specified")
 			}
 			return nil
@@ -66,6 +70,12 @@ func main() {
 	// 	fmt.Println("not push to origin!")
 	// }
 	fmt.Printf("%v\n", prettyPrint(arg))
+	if arg.Config != nil {
+		fmt.Printf("%v\n", prettyPrint(arg.Config.File.Get()))
+		for range arg.Config.File.UpdateEvents() {
+			fmt.Printf("%v\n", prettyPrint(arg.Config.File.Get()))
+		}
+	}
 }
 
 func prettyPrint(i interface{}) string {
