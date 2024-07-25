@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/BurntSushi/toml"
 	"github.com/fsnotify/fsnotify"
@@ -45,9 +46,9 @@ func (DisableLiveUpdate) isWatched() bool { return false }
 type File[T any, L LiveUpdateOpt] struct {
 	// TODO: how to prevent user copy File[T, L]?
 	// after copy, liveUpdate will not work and mutex copy? error prone!
-	mu sync.RWMutex
 
-	t *T
+	atomT atomic.Pointer[T]
+	t     *T
 
 	// these are for live-update
 	liveUpdate   L
@@ -104,9 +105,7 @@ func (f *File[T, L]) FromString(source string) error {
 	}
 
 	if f.liveUpdate.isWatched() {
-		f.mu.Lock()
-		f.t = &newValue
-		f.mu.Unlock()
+		f.atomT.Store(&newValue)
 	} else {
 		f.t = &newValue
 	}
@@ -133,9 +132,8 @@ func (f *File[T, L]) AllowInvalidExample() {}
 // Get() returns the inner T instance
 func (f *File[T, L]) Get() T {
 	if f.liveUpdate.isWatched() {
-		f.mu.RLock()
-		defer f.mu.RUnlock()
-		return *f.t
+		t := f.atomT.Load()
+		return *t
 	}
 	return *f.t
 }
