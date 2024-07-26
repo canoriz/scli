@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/BurntSushi/toml"
@@ -23,8 +22,9 @@ type LiveUpdateOpt interface {
 }
 
 var (
-	_ ParseExt = &File[any, EnableLiveUpdate]{}
-	_ ParseExt = &File[any, DisableLiveUpdate]{}
+	_ Parse     = &File[any, EnableLiveUpdate]{}
+	_ Parse     = &File[any, DisableLiveUpdate]{}
+	_ ParseOnce = &MarkOnce[*File[any, EnableLiveUpdate]]{}
 )
 
 var (
@@ -47,36 +47,7 @@ type File[T any, L LiveUpdateOpt] struct {
 	// TODO: how to prevent user copy File[T, L]?
 	// after copy, liveUpdate will not work and mutex copy? error prone!
 
-	atomT atomic.Pointer[T]
-	t     *T
-
-	// these are for live-update
-	liveUpdate   L
-	startWatcher sync.Once
-	events       chan fsnotify.Event
-}
-
-// this is a generic unmarshal function
-// json, yaml, toml all implemented this
-type unmarshalFn func(data []byte, v any) error
-
-// Parse data from file
-func (f *File[T, L]) FromString(source string) error {
-	content, err := os.ReadFile(source)
-	if err != nil {
-		return err
-	}
-
-	parseOrder := []unmarshalFn{
-		json.Unmarshal, yaml.Unmarshal, toml.Unmarshal,
-	}
-	if strings.HasSuffix(source, ".yaml") || strings.HasSuffix(source, ".yml") {
-		parseOrder = []unmarshalFn{yaml.Unmarshal}
-	} else if strings.HasSuffix(source, ".json") {
-		parseOrder = []unmarshalFn{json.Unmarshal}
-	} else if strings.HasSuffix(source, ".toml") {
-		parseOrder = []unmarshalFn{toml.Unmarshal}
-	}
+	parsed atomic.Bool
 
 	// Explaining why f.t is type *T, not T.
 	// When live updating, other routine may still hold
@@ -99,23 +70,65 @@ func (f *File[T, L]) FromString(source string) error {
 	// from Get() (and T{*R}, two T value contains same *R), then
 	// read/write R concurrently, it's their problem. Because use T
 	// instead of File[T] will still race.
-	newValue, err := parseByOrder[T](content, parseOrder)
+	atomT atomic.Pointer[T]
+	t     *T
+
+	// these are for live-update
+	liveUpdate L
+	events     chan fsnotify.Event
+}
+
+// this is a generic unmarshal function
+// json, yaml, toml all implemented this
+type unmarshalFn func(data []byte, v any) error
+
+// Parse data from file
+func (f *File[T, L]) FromString(source string) error {
+	if !f.parsed.CompareAndSwap(false, true) {
+		// make sure this method is called only once
+		panic("File[T,L].FromString() is called more than once")
+	}
+
+	err := f.fromString(source)
+	if err != nil {
+		return err
+	}
+
+	// watchChange starts only once
+	// because FromString should be called only once
+	if f.liveUpdate.isWatched() {
+		f.events = make(chan fsnotify.Event, 2)
+		f.watchChange(source)
+	}
+	return nil
+}
+
+func (f *File[T, L]) fromString(source string) error {
+	content, err := os.ReadFile(source)
+	if err != nil {
+		return err
+	}
+
+	parseOrder := []unmarshalFn{
+		json.Unmarshal, yaml.Unmarshal, toml.Unmarshal,
+	}
+	if strings.HasSuffix(source, ".yaml") || strings.HasSuffix(source, ".yml") {
+		parseOrder = []unmarshalFn{yaml.Unmarshal}
+	} else if strings.HasSuffix(source, ".json") {
+		parseOrder = []unmarshalFn{json.Unmarshal}
+	} else if strings.HasSuffix(source, ".toml") {
+		parseOrder = []unmarshalFn{toml.Unmarshal}
+	}
+
+	value, err := parseByOrder[T](content, parseOrder)
 	if err != nil {
 		return err
 	}
 
 	if f.liveUpdate.isWatched() {
-		f.atomT.Store(&newValue)
+		f.atomT.Store(&value)
 	} else {
-		f.t = &newValue
-	}
-
-	// watchChange starts only once
-	if f.liveUpdate.isWatched() {
-		f.startWatcher.Do(func() {
-			f.events = make(chan fsnotify.Event, 2)
-			f.watchChange(source)
-		})
+		f.t = &value
 	}
 	return nil
 }
@@ -126,8 +139,8 @@ func (f *File[T, L]) Example() string {
 	return "config-file"
 }
 
-// Marker for ParseExt
-func (f *File[T, L]) AllowInvalidExample() {}
+// Marker for ParseOnce
+func (f *File[T, L]) statefulOrImpure() {}
 
 // Get() returns the inner T instance
 func (f *File[T, L]) Get() T {
@@ -172,9 +185,9 @@ func (f *File[T, L]) watchChange(filename string) {
 					(event.Has(fsnotify.Write) || event.Has(fsnotify.Create))) ||
 					(currentConfigFile != "" && currentConfigFile != realConfigFile) {
 					realConfigFile = currentConfigFile
-					err = f.FromString(filename)
+					err := f.fromString(filename)
 					if err != nil {
-						log.Fatalf("read config file: %s", err)
+						log.Fatalf("read config file: %s", err) // TODO: better way of log
 					}
 					if f.liveUpdate.isWatched() {
 						select {

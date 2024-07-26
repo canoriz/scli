@@ -32,7 +32,7 @@ type Arg struct {
 	} `flag:"push" usage:"Push to remote repository"`
 
 	Config *struct {
-		File scli.File[map[string]any, scli.EnableLiveUpdate]
+		File scli.File[map[string]any, scli.EnableLiveUpdate] `default:"1.json"`
 	}
 }
 
@@ -48,6 +48,7 @@ func main() {
 		},
 	)
 	parser.Parse()
+	// parser.ParseArg("Config 1.json")
 	// if Parse() error, program exits
 
 	if arg.Help {
@@ -72,8 +73,8 @@ func main() {
 	fmt.Printf("%v\n", prettyPrint(arg))
 	if arg.Config != nil {
 		fmt.Printf("%v\n", prettyPrint(arg.Config.File.Get()))
-		for range arg.Config.File.UpdateEvents() {
-			fmt.Printf("%v\n", prettyPrint(arg.Config.File.Get()))
+		for e := range arg.Config.File.UpdateEvents() {
+			fmt.Printf("%v %v\n", e, prettyPrint(arg.Config.File.Get()))
 		}
 	}
 }

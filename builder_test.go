@@ -40,11 +40,11 @@ func (w *invalidExample) Example() string {
 	return "error"
 }
 
-type allowInvalidExample struct {
+type parseOnceTyImpl struct {
 	ip string
 }
 
-func (w *allowInvalidExample) FromString(s string) error {
+func (w *parseOnceTyImpl) FromString(s string) error {
 	if s == "error" {
 		return errors.New("can not be error")
 	}
@@ -52,16 +52,17 @@ func (w *allowInvalidExample) FromString(s string) error {
 	return nil
 }
 
-func (w *allowInvalidExample) Example() string {
+func (w *parseOnceTyImpl) Example() string {
 	return "error"
 }
 
-func (w *allowInvalidExample) AllowInvalidExample() {}
+func (w *parseOnceTyImpl) statefulOrImpure() {}
 
 var (
 	// type checker
-	_ Parse    = &invalidExample{}
-	_ ParseExt = &allowInvalidExample{}
+	_ Parse     = &invalidExample{}
+	_ ParseOnce = &parseOnceTyImpl{}
+	_ ParseOnce = &MarkOnce[*addr]{}
 )
 
 type stringAlias string
@@ -380,6 +381,17 @@ var (
 		"-o",
 		[]string{"no value provided for option"},
 	}, {
+		"option multiple occurance",
+		func(input string) error {
+			var s0 struct {
+				Op int `flag:"o" default:"3"`
+			}
+			_, err := BuildParser(&s0).ParseArg(input)
+			return err
+		},
+		"-o 3 -o 4",
+		[]string{"option", "more than once"},
+	}, {
 		"not defined option",
 		func(input string) error {
 			var s0 struct {
@@ -522,6 +534,7 @@ var (
 		"-o 4 cmd1 -n1 4 -af",
 		[]string{`option "--af" provided in`, "not defined"},
 	}}
+	// TODO: add file tests
 
 	parseOkCase = []struct {
 		about string
@@ -762,19 +775,20 @@ var (
 			return s0, s1, err
 		},
 	}, {
-		"allow invalid example",
+		"parse once example",
 		func() (any, any, error) {
 			type ty struct {
-				A0 allowInvalidExample
+				A0 parseOnceTyImpl
 			}
 			var s0 ty
 			s1 := ty{
-				A0: allowInvalidExample{"a00"},
+				A0: parseOnceTyImpl{"a00"},
 			}
 			_, err := BuildParser(&s0).ParseArg("a00")
 			return s0, s1, err
 		},
 	}}
+	// TODO: add file tests
 )
 
 func TestPanic(t *testing.T) {

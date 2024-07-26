@@ -8,37 +8,95 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"unsafe"
 )
 
+// Parse is the interface for custom type. Any type implemented this interface
+// can be used as an argument/option in scli's definition struct.
 type Parse interface {
 	FromString(s string) error
 	Example() string
 }
 
-// Interface for types thar are Parse, but t.FromString(t.Example()) will return error.
-// A real usage of invalid Example() would be ConfigFile type. ConfigFile.FromString
-// will take a path of file then read the content of file into the struct, and Example()
-// returns a example of file path. Since the file that path points to probably does not
-// exist, FromString(Example()) will fail.
+// ParseOnce is an interface for types that are Parse, but the FromString() of
+// the type should be called at most once. This restrictrion is vital for
+// implementing types like ConfigFile. Lets see why. First, some definitions.
 //
-// The difference of Parse and ParseExt in the case of ConfigFile type is that the
-// value of config file is not parsed from input string, but read from the file the
-// input string points to. There is a layer of indirection. Whereas for type Addr
-// the input string "host:port" is enough, no indirection, so Addr.Example() should
-// not fail.
+// Definitions:
 //
-// NOTE: There are many ways to allow invalid Example(). Defining something like
+// 1. Stateful
+// Assuming all the outside running environment is unchanged, for instance t,
+// calling t.FromString() once and calling t.FromString(..) for the second time
+// will result in different behavior. One example is FromString contains logics
+// based on a global variable which is inherited next time, then the second call
+// will not trigger the same logic.
 //
-//	type ParseX interface {
-//		FromString(s string) error
-//		ExampleX() string // X means FromString() will fail
+// 2. Impure
+// For instance t, the result of t.FromString(..) not only dependent on the
+// code of FromString it self, and may produce different outcome based on the
+// running environment. One example is FromString read a file, and file may or
+// may not exist on different environment.
+//
+// For ConfigFile type, apparently, it's Impure because it relys on files which
+// is not part of the code.
+// For ConfigFile that can live update it's value when file is changed, the type
+// is Stateful. A watcher is created for the first time a FromString() success
+// and when file changes, FromString is called again to load new data, but not
+// creating new watchers.
+//
+// For ParseOnce, scli will not check default value nor example value, and
+// Parser.Parse()FromString is called only once at parsing.
+// If you think your type T is ParseOnce, use MarkOnce[T] to convert your Parse
+// type to ParseOnce
+type ParseOnce interface {
+	Parse
+
+	// make it private so users cannot implement their own ParseOnce
+	statefulOrImpure()
+}
+
+// EXPERIMENTAL: MarkOnce[T]: convert Parse to ParseOnce
+// for type T that *T is Parse
+//
+//	struct {
+//		t T
 //	}
 //
-// also works. but I have no idea which one has a clear advantange.
-type ParseExt interface {
-	Parse
-	AllowInvalidExample()
+// should now define:
+//
+//	type TOnce = scli.MarkOnce[*T]
+//
+//	struct {
+//			tOnce TOnce
+//	}
+//
+// and get T by call tOnce.Get()
+type MarkOnce[T Parse] struct {
+	called atomic.Bool
+	t      T
 }
+
+func (m *MarkOnce[T]) FromString(s string) error {
+	if m.called.CompareAndSwap(false, true) {
+		valTy := reflect.TypeOf(m.t).Elem()
+		tField := reflect.ValueOf(m).Elem().Field(1)
+		tField = reflect.NewAt(tField.Type(), unsafe.Pointer(tField.UnsafeAddr())).Elem()
+		tField.Set(reflect.New(valTy))
+		return m.t.FromString(s)
+	}
+	panic("FromString() of ParseOnce is called twice")
+}
+
+func (m *MarkOnce[T]) Example() string {
+	return m.t.Example()
+}
+
+func (m *MarkOnce[T]) Get() *T {
+	return &m.t
+}
+
+func (m *MarkOnce[T]) statefulOrImpure() {}
 
 var (
 	ErrIsHelp = errors.New("argument is help message")
@@ -70,13 +128,14 @@ const ( // build time errors
 
 const ( // runtime errors
 	errOptionNoValue     = `no value provided for option "--%s" in %s`
+	errOptionNotFound    = `option "--%s" is required in "%s" but not provided`
+	errOptionDuplicate   = `option "--%s" is given more than once`
 	errNoOption          = `option "--%s" provided in "%s" but not defined`
 	errNoSubcommand      = `subcommand "%s" provided in "%s" but not defined`
 	errRemainUnparsed    = `parse success until "%s", maybe remove "%s" and try again?`
 	errParseOption       = `error parsing argument of option "--%s %s" error: %w`
 	errParsePositonalArg = `error parsing positional argument "%s" value %s, error: %w`
 	errTooManyArgs       = `error parsing positional argument: too many args, expect %d, given %d args`
-	errOptionNotFound    = `option "--%s" is required in "%s" but not provided`
 	errArgNotFound       = `argument <%s> is required in "%s" but not provided`
 )
 
@@ -249,6 +308,9 @@ type optionInfo struct {
 
 	defaultVal *string // non-nil if argument has a default value
 	example    *string // non-nil if argument is a custom type
+
+	// the details of Parse interface if this is a custom type
+	parseDetail parseStatus
 }
 
 // argInfo contains information for positional arguments
@@ -262,6 +324,9 @@ type argInfo struct {
 
 	defaultVal *string // non-nil if argument has a default value
 	example    *string // non-nil if argument is a custom type
+
+	// the details of Parse interface if this is a custom type
+	parseDetail parseStatus
 }
 
 // define argOrOption to make call simpler
@@ -278,6 +343,9 @@ type argOrOption struct {
 	consumeLen int
 	ty         kwType  // type of option argument. boolean or normal argument
 	defaultVal *string // non-nil if argument has a default value
+
+	// the details of Parse interface if this is a custom type
+	parseDetail parseStatus
 }
 
 // subcmdInfo contains information of a subcommand
@@ -451,6 +519,13 @@ func buildParseCmdFn(
 						helpText:  helpText,
 						isHelpCmd: true,
 					}, nil
+				}
+				if _, ok := encounter[realOption]; ok {
+					// encoutered before
+					return parseCmdResult{}, &parseCmdError{
+						err:   fmt.Errorf(errOptionDuplicate, realOption),
+						usage: helpText,
+					}
 				}
 
 				remain, parseOptionErr := parseOption(cmd, helpText, input)
@@ -633,15 +708,16 @@ func buildArgAndCommandList(
 
 		usage := defField.Tag.Get("usage")
 
-		p, exampleCannotParse, e := hasCustomParser(valField)
-		if exampleCannotParse {
+		p, parseDetail := hasCustomParser(valField)
+		if parseDetail == exampleCannotParse {
 			return baseCmd, fmt.Errorf(
 				errNotValidExample,
 				valField.Type(),
 				currentFieldChain,
 			)
 		}
-		if e == nil { // has implemented Parse
+		if parseDetail == validParse || parseDetail == parseOnce {
+			// has implemented Parse
 			if err := baseCmd.AddArgOrOption(
 				cliName,
 				argOrOption{
@@ -654,6 +730,8 @@ func buildArgAndCommandList(
 					ty:         valArg,
 					consumeLen: argLen,
 					defaultVal: defaultVal,
+
+					parseDetail: parseDetail,
 				},
 				currentFieldChain,
 			); err != nil {
@@ -663,46 +741,53 @@ func buildArgAndCommandList(
 			switch {
 			case valField.Kind() == reflect.Slice:
 				ptrToElem := reflect.New(valField.Type().Elem())
-				parseElemFn, elemExample, err :=
-					func() (func(reflect.Value) parseArgFn, *string, error) {
-						p, exampleCannotParse, e := hasCustomParser(
+				parseElemFn, elemExample, parseDetail, err :=
+					func() (
+						func(reflect.Value) parseArgFn,
+						*string, // example
+						parseStatus, // if type is custom, this contains the details
+						error,
+					) {
+						p, parseDetail := hasCustomParser(
 							reflect.New(ptrToElem.Type().Elem()).Elem(),
 						)
-						if exampleCannotParse {
-							return nil, nil, fmt.Errorf(
-								errNotValidExample,
-								ptrToElem.Type().Elem(),
-								currentFieldChain,
-							)
+						if parseDetail == exampleCannotParse {
+							return nil, nil, exampleCannotParse,
+								fmt.Errorf(
+									errNotValidExample,
+									ptrToElem.Type().Elem(),
+									currentFieldChain,
+								)
 						}
-						if e == nil { // has implemented Parse
+						if parseDetail == validParse || parseDetail == parseOnce {
+							// has implemented Parse
 							return p, customExampleFor(
 								reflect.New(ptrToElem.Type().Elem()).Elem(),
-							), nil
+							), parseDetail, nil
 						} else {
 							switch ptrToElem.Elem().Type() {
 							case reflect.TypeOf(string("")):
 								strStr := "str"
 								return func(_ reflect.Value) parseArgFn {
 									return parseString
-								}, &strStr, nil
+								}, &strStr, notParse, nil
 							case reflect.TypeOf(bool(false)):
 								falseStr := "false"
 								return func(_ reflect.Value) parseArgFn {
 									return parseBool
-								}, &falseStr, nil
+								}, &falseStr, notParse, nil
 							case reflect.TypeOf(int(0)):
 								intStr := "0"
 								return func(_ reflect.Value) parseArgFn {
 									return parseInt
-								}, &intStr, nil
+								}, &intStr, notParse, nil
 							case reflect.TypeOf(float64(0)):
 								float64Str := "3.14"
 								return func(_ reflect.Value) parseArgFn {
 									return parseFloat64
-								}, &float64Str, nil
+								}, &float64Str, notParse, nil
 							default:
-								return nil, nil, fmt.Errorf(
+								return nil, nil, notParse, fmt.Errorf(
 									errNotImplParse,
 									ptrToElem.Type(),
 									currentFieldChain,
@@ -785,6 +870,8 @@ func buildArgAndCommandList(
 						ty:         sliceArg,
 						consumeLen: argLen, // only option use this length
 						defaultVal: defaultVal,
+
+						parseDetail: parseDetail,
 					},
 					currentFieldChain,
 				); err != nil {
@@ -899,28 +986,37 @@ func buildArgAndCommandList(
 	return baseCmd, nil
 }
 
+// parseStatus is detailed status for Parse interface
+type parseStatus int
+
+const (
+	notParse parseStatus = iota
+	validParse
+	exampleCannotParse
+	parseOnce
+)
+
 // customParser return parseFn for this specific r: reflect.Value
 // returns parseFn, exampleCannotParse, error
 // if r is Parse, but Example() cannot Parse, return exampleCannotParse = true
 func hasCustomParser(r reflect.Value) (
-	customParser func(typeSameAsR reflect.Value) parseArgFn,
-	exampleCannotParse bool,
-	err error,
+	_customParser func(typeSameAsR reflect.Value) parseArgFn,
+	_status parseStatus,
 ) {
 	if !r.CanAddr() {
-		return customParser, false,
-			fmt.Errorf("can not addr type %v", r.Type())
+		return nil, notParse
 	}
 	if parse, ok := r.Addr().Interface().(Parse); ok {
-		_, isParseExt := parse.(ParseExt)
-		if !isParseExt && parse.FromString(parse.Example()) != nil {
-			return customParser, true,
-				fmt.Errorf("example of %v cannot parse", r.Type())
+		_, isParseOnce := parse.(ParseOnce)
+		if isParseOnce {
+			return customParserFor, parseOnce
 		}
-		return customParserFor, false, nil
+		if !isParseOnce && parse.FromString(parse.Example()) != nil {
+			return nil, exampleCannotParse
+		}
+		return customParserFor, validParse
 	}
-	return customParser, false,
-		errors.New("does not implement Parse")
+	return nil, notParse
 }
 
 // calling this function returns the specific function parse
@@ -956,7 +1052,7 @@ func validateArgAndCommand(fieldChain string, cmd cmdInfo) error {
 				fmt.Sprintf("%s.%s", fieldChain, info.defName),
 			)
 		}
-		if info.defaultVal != nil {
+		if info.defaultVal != nil && info.parseDetail != parseOnce {
 			_, err := cmd.options[optionName].parseFn([]string{*info.defaultVal})
 			if err != nil {
 				return fmt.Errorf(
@@ -969,7 +1065,7 @@ func validateArgAndCommand(fieldChain string, cmd cmdInfo) error {
 		}
 	}
 	for _, arg := range cmd.args {
-		if arg.defaultVal != nil {
+		if arg.defaultVal != nil && arg.parseDetail != parseOnce {
 			_, err := arg.parseFn([]string{*arg.defaultVal})
 			if err != nil {
 				return fmt.Errorf(
@@ -1002,9 +1098,11 @@ func (c *cmdInfo) AddArgOrOption(name string, a argOrOption, field string) error
 				defName: a.defName,
 				usage:   a.usage,
 				ty:      a.ty,
-				example: a.example,
 
+				example:    a.example,
 				defaultVal: a.defaultVal,
+
+				parseDetail: a.parseDetail,
 			},
 			field,
 		); err != nil {
@@ -1024,6 +1122,8 @@ func (c *cmdInfo) AddArgOrOption(name string, a argOrOption, field string) error
 
 			defaultVal: a.defaultVal,
 			example:    a.example,
+
+			parseDetail: a.parseDetail,
 		},
 		field,
 	); err != nil {
