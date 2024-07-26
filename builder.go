@@ -115,7 +115,7 @@ const ( // build time errors
 		"or type `Parse` to represent a custom type"
 	errNotValidExample = "Example() of custom type *%s cannot parsed by FromString(..) " +
 		"at field %s. If you are sure parsing Example() may fail and it is AS EXPECTED, " +
-		"consider furfilling ParseExt interface"
+		"consider use MarkOnce, see MarkOnce"
 	errArgNoDefault = "positional argument type %s at field %s requires a default value " +
 		"because a previous argument has default value"
 	errSliceArgHasDefault = "slice argument cannot have default value: argument %s at field %s"
