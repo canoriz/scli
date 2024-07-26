@@ -43,6 +43,9 @@ type DisableLiveUpdate struct{}
 func (DisableLiveUpdate) isWatched() bool { return false }
 
 // Load T from configuration file
+// File[T, L] can be used with scli argument parser, or separately
+// To enable live update, use File[T, scli.EnableLiveUpdate]
+// To disable live update, use File[T, scli.DisableLiveUpdate]
 type File[T any, L LiveUpdateOpt] struct {
 	// TODO: how to prevent user copy File[T, L]?
 	// after copy, liveUpdate will not work and mutex copy? error prone!
@@ -143,12 +146,12 @@ func (f *File[T, L]) Example() string {
 func (f *File[T, L]) statefulOrImpure() {}
 
 // Get() returns the inner T instance
-func (f *File[T, L]) Get() T {
+func (f *File[T, L]) Get() *T {
 	if f.liveUpdate.isWatched() {
 		t := f.atomT.Load()
-		return *t
+		return t
 	}
-	return *f.t
+	return f.t
 }
 
 func (f *File[T, L]) watchChange(filename string) {
