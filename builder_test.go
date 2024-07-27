@@ -381,7 +381,7 @@ var (
 		"-o",
 		[]string{"no value provided for option"},
 	}, {
-		"option multiple occurance",
+		"option multiple occurrence",
 		func(input string) error {
 			var s0 struct {
 				Op int `flag:"o" default:"3"`
@@ -587,7 +587,7 @@ var (
 			return s0, s1, err
 		},
 	}, {
-		"parse many types",
+		"parse many types args",
 		func() (any, any, error) {
 			type ty struct {
 				S0 string  `arg:"s0"`
@@ -613,6 +613,36 @@ var (
 			}
 			_, err := BuildParser(&s0).ParseArg(
 				"a00 42 false -1.2345 127.0.0.1:3000 a3 a4",
+			)
+			return s0, s1, err
+		},
+	}, {
+		"parse many types options",
+		func() (any, any, error) {
+			type ty struct {
+				S0 string  `flag:"s0"`
+				I1 int     `flag:"i1"`
+				B2 bool    `flag:"b2"`
+				F3 float64 `flag:"f3"`
+
+				C0  addr     `flag:"c0"`
+				SS0 []string `flag:"ss0"`
+			}
+			var s0 ty
+			s1 := ty{
+				S0: "a00",
+				I1: 42,
+				B2: false,
+				F3: -1.2345,
+
+				C0: addr{
+					ip:   "127.0.0.1",
+					port: "3000",
+				},
+				SS0: []string{"a3", "a4"},
+			}
+			_, err := BuildParser(&s0).ParseArg(
+				"-s0 a00 -i1 42 -/b2 -f3 -1.2345 -c0 127.0.0.1:3000 -ss0 a3,a4",
 			)
 			return s0, s1, err
 		},
@@ -851,7 +881,7 @@ func TestParseOk2(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse error: %v", err)
 			}
-			assert.Equal(t, out, exp)
+			assert.Equal(t, exp, out)
 		})
 	}
 }

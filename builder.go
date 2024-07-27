@@ -20,7 +20,7 @@ type Parse interface {
 }
 
 // ParseOnce is an interface for types that are Parse, but the FromString() of
-// the type should be called at most once. This restrictrion is vital for
+// the type should be called at most once. This restriction is vital for
 // implementing types like ConfigFile. Lets see why. First, some definitions.
 //
 // Definitions:
@@ -38,7 +38,7 @@ type Parse interface {
 // running environment. One example is FromString read a file, and file may or
 // may not exist on different environment.
 //
-// For ConfigFile type, apparently, it's Impure because it relys on files which
+// For ConfigFile type, apparently, it's Impure because it relies on files which
 // is not part of the code.
 // For ConfigFile that can live update it's value when file is changed, the type
 // is Stateful. A watcher is created for the first time a FromString() success
@@ -81,6 +81,8 @@ func (m *MarkOnce[T]) FromString(s string) error {
 	if m.called.CompareAndSwap(false, true) {
 		valTy := reflect.TypeOf(m.t).Elem()
 		tField := reflect.ValueOf(m).Elem().Field(1)
+
+		// convert unexported field to a reflect.Value that can set
 		tField = reflect.NewAt(tField.Type(), unsafe.Pointer(tField.UnsafeAddr())).Elem()
 		tField.Set(reflect.New(valTy))
 		return m.t.FromString(s)
@@ -127,16 +129,16 @@ const ( // build time errors
 )
 
 const ( // runtime errors
-	errOptionNoValue     = `no value provided for option "--%s" in %s`
-	errOptionNotFound    = `option "--%s" is required in "%s" but not provided`
-	errOptionDuplicate   = `option "--%s" is given more than once`
-	errNoOption          = `option "--%s" provided in "%s" but not defined`
-	errNoSubcommand      = `subcommand "%s" provided in "%s" but not defined`
-	errRemainUnparsed    = `parse success until "%s", maybe remove "%s" and try again?`
-	errParseOption       = `error parsing argument of option "--%s %s" error: %w`
-	errParsePositonalArg = `error parsing positional argument "%s" value %s, error: %w`
-	errTooManyArgs       = `error parsing positional argument: too many args, expect %d, given %d args`
-	errArgNotFound       = `argument <%s> is required in "%s" but not provided`
+	errOptionNoValue      = `no value provided for option "--%s" in %s`
+	errOptionNotFound     = `option "--%s" is required in "%s" but not provided`
+	errOptionDuplicate    = `option "--%s" is given more than once`
+	errNoOption           = `option "--%s" provided in "%s" but not defined`
+	errNoSubcommand       = `subcommand "%s" provided in "%s" but not defined`
+	errRemainUnparsed     = `parse success until "%s", maybe remove "%s" and try again?`
+	errParseOption        = `error parsing argument of option "--%s %s" error: %w`
+	errParsePositionalArg = `error parsing positional argument "%s" value %s, error: %w`
+	errTooManyArgs        = `error parsing positional argument: too many args, expect %d, given %d args`
+	errArgNotFound        = `argument <%s> is required in "%s" but not provided`
 )
 
 func maxInt(a, b int) int {
@@ -179,6 +181,10 @@ func (pe *parseCmdError) Error() string {
 }
 
 type parseCmdFn func([]string) (parseCmdResult, *parseCmdError)
+
+// TODO: parseArgResult is not used now. The set work is now done
+// by parse function it self. The parseArgResult.rv is not used anymore.
+// Maybe change signature return error only
 type parseArgFn func([]string) (parseArgResult, error)
 
 type Parser[T any] struct {
@@ -298,7 +304,7 @@ func newCmdInfo() cmdInfo {
 	}
 }
 
-// optionInfo contains information for options (--optino value)
+// optionInfo contains information for options (--option value)
 type optionInfo struct {
 	parseFn    parseArgFn
 	defName    string // name of field in struct definition
@@ -373,7 +379,7 @@ func buildParseCmdFn(
 	}
 
 	// parseOption try to parse input as an option
-	// if ok, set argStruct and returns (remaind input, nil)
+	// if ok, set argStruct and returns (remaining input, nil)
 	// if failed, returns (input unchanged, error)
 	parseOption := func(cmd cmdInfo, helpText string, input []string) (
 		_rest []string, _err *parseCmdError,
@@ -389,6 +395,7 @@ func buildParseCmdFn(
 			}
 		}
 		if t.ty == boolArg {
+			// bool is special, no need to parse, set value now
 			argStructPtr.FieldByName(t.defName).Set(
 				reflect.ValueOf(
 					!strings.HasPrefix(strings.Trim(first, "-"), "/"),
@@ -404,7 +411,7 @@ func buildParseCmdFn(
 				}
 			}
 			val := input[1:t.consumeLen] // ["--option", "arg"], we take "arg"
-			r, err := t.parseFn(val)
+			_, err := t.parseFn(val)
 			if err != nil {
 				return input, &parseCmdError{
 					err: fmt.Errorf(
@@ -414,8 +421,6 @@ func buildParseCmdFn(
 					usage: helpText,
 				}
 			}
-			// parse success
-			argStructPtr.FieldByName(t.defName).Set(r.rv)
 		}
 		return input[t.consumeLen:], nil
 	}
@@ -443,32 +448,30 @@ func buildParseCmdFn(
 
 		t := cmd.args[argNumber]
 		if t.ty == sliceArg {
-			r, err := t.parseFn(input)
+			_, err := t.parseFn(input)
 			if err != nil {
 				return input, &parseCmdError{
 					err: fmt.Errorf(
-						errParsePositonalArg,
+						errParsePositionalArg,
 						t.cliName, strings.Join(input, " "), err,
 					),
 					usage: helpText,
 				}
 			}
-			argStructPtr.FieldByName(t.defName).Set(r.rv)
 			return []string{}, nil // slice arg consumes all input
 		}
 
 		// argument is not slice
-		r, err := t.parseFn([]string{first})
+		_, err := t.parseFn([]string{first})
 		if err != nil {
 			return input, &parseCmdError{
 				err: fmt.Errorf(
-					errParsePositonalArg,
+					errParsePositionalArg,
 					t.cliName, first, err,
 				),
 				usage: helpText,
 			}
 		}
-		argStructPtr.FieldByName(t.defName).Set(r.rv)
 		return input[1:], nil
 	}
 
@@ -594,14 +597,13 @@ func buildParseCmdFn(
 		if cmd.HasArgs() {
 			for _, arg := range cmd.args[argsProcessed:] {
 				if arg.defaultVal != nil {
-					r, err := arg.parseFn([]string{*arg.defaultVal})
+					_, err := arg.parseFn([]string{*arg.defaultVal})
 					if err != nil {
 						panic(
 							"default values are validated before. " +
 								"Cannot parse error at parse",
 						)
 					}
-					argStructPtr.FieldByName(arg.defName).Set(r.rv)
 				} else if arg.ty == sliceArg {
 					// sliceArg can be omitted to represent empty slice
 				} else {
@@ -620,14 +622,13 @@ func buildParseCmdFn(
 		for optionName, info := range cmd.options {
 			if _, argFound := encounter[optionName]; !argFound {
 				if info.defaultVal != nil {
-					r, err := info.parseFn([]string{*info.defaultVal})
+					_, err := info.parseFn([]string{*info.defaultVal})
 					if err != nil {
 						panic(
 							"default values are validated before. " +
 								"Cannot parse error at parse",
 						)
 					}
-					argStructPtr.FieldByName(info.defName).Set(r.rv)
 				} else {
 					return parseCmdResult{}, &parseCmdError{
 						err: fmt.Errorf(
@@ -768,24 +769,16 @@ func buildArgAndCommandList(
 							switch ptrToElem.Elem().Type() {
 							case reflect.TypeOf(string("")):
 								strStr := "str"
-								return func(_ reflect.Value) parseArgFn {
-									return parseString
-								}, &strStr, notParse, nil
+								return parseString, &strStr, notParse, nil
 							case reflect.TypeOf(bool(false)):
 								falseStr := "false"
-								return func(_ reflect.Value) parseArgFn {
-									return parseBool
-								}, &falseStr, notParse, nil
+								return parseBool, &falseStr, notParse, nil
 							case reflect.TypeOf(int(0)):
 								intStr := "0"
-								return func(_ reflect.Value) parseArgFn {
-									return parseInt
-								}, &intStr, notParse, nil
+								return parseInt, &intStr, notParse, nil
 							case reflect.TypeOf(float64(0)):
 								float64Str := "3.14"
-								return func(_ reflect.Value) parseArgFn {
-									return parseFloat64
-								}, &float64Str, notParse, nil
+								return parseFloat64, &float64Str, notParse, nil
 							default:
 								return nil, nil, notParse, fmt.Errorf(
 									errNotImplParse,
@@ -802,24 +795,22 @@ func buildArgAndCommandList(
 				parseFn, example := func() (parseArgFn, *string) {
 					if isArg {
 						parseFn := func(s []string) (parseArgResult, error) {
-							// slice argument are passed seperated by space
+							// slice argument are passed separated by space
 							if len(s) == 0 {
 								return parseArgResult{
 									rv: reflect.MakeSlice(valField.Type(), 0, 0),
 								}, nil
 							}
-							resultSlice := reflect.MakeSlice(
+							valField.Set(reflect.MakeSlice(
 								valField.Type(), len(s), len(s),
-							)
+							))
 							for i, si := range s {
-								newElem := reflect.New(ptrToElem.Type().Elem()).Elem()
-								res, err := parseElemFn(newElem)([]string{si})
+								_, err := parseElemFn(valField.Index(i))([]string{si})
 								if err != nil {
 									return parseArgResult{}, err
 								}
-								resultSlice.Index(i).Set(res.rv)
 							}
-							return parseArgResult{rv: resultSlice}, nil
+							return parseArgResult{rv: valField}, nil
 						}
 						return parseFn, elemExample
 					} else {
@@ -831,18 +822,17 @@ func buildArgAndCommandList(
 								}, nil
 							}
 							strSlice := strings.Split(str, ",")
-							resultSlice := reflect.MakeSlice(
+							valField.Set(reflect.MakeSlice(
 								valField.Type(), len(strSlice), len(strSlice),
-							)
+							))
 							for i, si := range strSlice {
-								newElem := reflect.New(ptrToElem.Type().Elem()).Elem()
-								res, err := parseElemFn(newElem)([]string{si})
+								// newElem := reflect.New(ptrToElem.Type().Elem()).Elem()
+								_, err := parseElemFn(valField.Index(i))([]string{si})
 								if err != nil {
 									return parseArgResult{}, err
 								}
-								resultSlice.Index(i).Set(res.rv)
 							}
-							return parseArgResult{rv: resultSlice}, nil
+							return parseArgResult{rv: valField}, nil
 						}
 						example := func(elemExample *string) *string {
 							if elemExample != nil {
@@ -884,7 +874,7 @@ func buildArgAndCommandList(
 						isArg:   isArg,
 						defName: defName,
 
-						parseFn:    parseString,
+						parseFn:    parseString(valField),
 						usage:      usage,
 						ty:         valArg,
 						consumeLen: argLen,
@@ -901,7 +891,7 @@ func buildArgAndCommandList(
 						isArg:   isArg,
 						defName: defName,
 
-						parseFn:    parseBool,
+						parseFn:    parseBool(valField),
 						usage:      usage,
 						ty:         boolArg,
 						consumeLen: boolArgLen,
@@ -918,7 +908,7 @@ func buildArgAndCommandList(
 						isArg:   isArg,
 						defName: defName,
 
-						parseFn:    parseInt,
+						parseFn:    parseInt(valField),
 						usage:      usage,
 						ty:         valArg,
 						consumeLen: argLen,
@@ -935,7 +925,7 @@ func buildArgAndCommandList(
 						isArg:   isArg,
 						defName: defName,
 
-						parseFn:    parseFloat64,
+						parseFn:    parseFloat64(valField),
 						usage:      usage,
 						ty:         valArg,
 						consumeLen: argLen,
@@ -962,7 +952,8 @@ func buildArgAndCommandList(
 				parseFn, _ := buildParseCmdFn(
 					currentFieldChain,
 					fmt.Sprintf("%s %s", viewNameChain, cliName),
-					instance)
+					instance,
+				)
 				if err := baseCmd.AddCommand(
 					cliName,
 					subcmdInfo{
@@ -1212,29 +1203,47 @@ func (c *cmdInfo) AddCommand(
 	return nil
 }
 
-func parseBool(s []string) (parseArgResult, error) {
-	b, e := strconv.ParseBool(strings.Join(s, ""))
-	return parseArgResult{
-		rv: reflect.ValueOf(b),
-	}, e
+func parseBool(r reflect.Value) parseArgFn {
+	return func(s []string) (parseArgResult, error) {
+		b, e := strconv.ParseBool(strings.Join(s, ""))
+		if e != nil {
+			return parseArgResult{}, e
+		}
+		rv := reflect.ValueOf(b)
+		r.Set(rv)
+		return parseArgResult{rv: rv}, e
+	}
 }
 
-func parseString(s []string) (parseArgResult, error) {
-	return parseArgResult{
-		rv: reflect.ValueOf(strings.Join(s, "")),
-	}, nil
+func parseString(r reflect.Value) parseArgFn {
+	return func(s []string) (parseArgResult, error) {
+		sVal := strings.Join(s, "")
+		rv := reflect.ValueOf(sVal)
+		r.Set(rv)
+		return parseArgResult{rv: rv}, nil
+	}
 }
 
-func parseInt(s []string) (parseArgResult, error) {
-	b, e := strconv.ParseInt(strings.Join(s, ""), 0, 64)
-	return parseArgResult{
-		rv: reflect.ValueOf(int(b)),
-	}, e
+func parseInt(r reflect.Value) parseArgFn {
+	return func(s []string) (parseArgResult, error) {
+		i, e := strconv.ParseInt(strings.Join(s, ""), 0, 64)
+		if e != nil {
+			return parseArgResult{}, e
+		}
+		rv := reflect.ValueOf(int(i))
+		r.Set(rv)
+		return parseArgResult{rv: rv}, e
+	}
 }
 
-func parseFloat64(s []string) (parseArgResult, error) {
-	b, e := strconv.ParseFloat(strings.Join(s, ""), 64)
-	return parseArgResult{
-		rv: reflect.ValueOf(b),
-	}, e
+func parseFloat64(r reflect.Value) parseArgFn {
+	return func(s []string) (parseArgResult, error) {
+		f, e := strconv.ParseFloat(strings.Join(s, ""), 64)
+		if e != nil {
+			return parseArgResult{}, e
+		}
+		rv := reflect.ValueOf(f)
+		r.Set(rv)
+		return parseArgResult{rv: rv}, e
+	}
 }

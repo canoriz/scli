@@ -47,8 +47,7 @@ func (DisableLiveUpdate) isWatched() bool { return false }
 // To enable live update, use File[T, scli.EnableLiveUpdate]
 // To disable live update, use File[T, scli.DisableLiveUpdate]
 type File[T any, L LiveUpdateOpt] struct {
-	// TODO: how to prevent user copy File[T, L]?
-	// after copy, liveUpdate will not work and mutex copy? error prone!
+	// go vet will warn if user try to copy instance.
 
 	parsed atomic.Bool
 
@@ -190,7 +189,7 @@ func (f *File[T, L]) watchChange(filename string) {
 					realConfigFile = currentConfigFile
 					err := f.fromString(filename)
 					if err != nil {
-						log.Fatalf("read config file: %s", err) // TODO: better way of log
+						log.Printf("read config file error: %s", err) // TODO: better way of log
 					}
 					if f.liveUpdate.isWatched() {
 						select {

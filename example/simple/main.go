@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/canoriz/scli"
 )
@@ -32,8 +33,13 @@ type Arg struct {
 	} `flag:"push" usage:"Push to remote repository"`
 
 	Config *struct {
-		File scli.File[map[string]any, scli.EnableLiveUpdate] `default:"1.json"`
+		File scli.File[A, scli.EnableLiveUpdate]
 	}
+}
+
+type A struct {
+	Name  string
+	Email string
 }
 
 func main() {
@@ -71,12 +77,14 @@ func main() {
 	// 	fmt.Println("not push to origin!")
 	// }
 	fmt.Printf("%v\n", prettyPrint(arg))
+	var wg sync.WaitGroup
 	if arg.Config != nil {
 		fmt.Printf("%v\n", prettyPrint(arg.Config.File.Get()))
 		for e := range arg.Config.File.UpdateEvents() {
 			fmt.Printf("%v %v\n", e, prettyPrint(arg.Config.File.Get()))
 		}
 	}
+	wg.Wait()
 }
 
 func prettyPrint(i interface{}) string {

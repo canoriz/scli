@@ -187,7 +187,7 @@ func makeDefaultOrExample(
 	if defaultVal != nil {
 		if ty == boolArg {
 			// default value of bool type can be T, F, 0, 1, true, false
-			// for consistency, only print true/falue in help message
+			// for consistency, only print true/false in help message
 			// default value among {T, 1, true} will print true
 			// {F, 0, false} will print false
 			// all default value is verified before, always success
