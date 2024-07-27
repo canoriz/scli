@@ -28,8 +28,8 @@ var (
 )
 
 var (
-	EnableLU  LiveUpdateOpt = EnableLiveUpdate{}
-	DisableLU LiveUpdateOpt = DisableLiveUpdate{}
+	_ LiveUpdateOpt = EnableLiveUpdate{}
+	_ LiveUpdateOpt = DisableLiveUpdate{}
 )
 
 // EnableLiveUpdate implements LiveUpdateOpt
@@ -48,7 +48,6 @@ func (DisableLiveUpdate) isWatched() bool { return false }
 // To disable live update, use File[T, scli.DisableLiveUpdate]
 type File[T any, L LiveUpdateOpt] struct {
 	// go vet will warn if user try to copy instance.
-
 	parsed atomic.Bool
 
 	// Explaining why f.t is type *T, not T.
@@ -99,7 +98,7 @@ func (f *File[T, L]) FromString(source string) error {
 	// watchChange starts only once
 	// because FromString should be called only once
 	if f.liveUpdate.isWatched() {
-		f.events = make(chan fsnotify.Event, 2)
+		f.events = make(chan fsnotify.Event, 8)
 		f.watchChange(source)
 	}
 	return nil
