@@ -195,7 +195,6 @@ func (f *File[T, L]) watchChange(filename string) {
 						select {
 						case f.events <- event:
 						default:
-							fmt.Println("discard")
 							// if f.events blocks, discard this event
 						}
 					}
