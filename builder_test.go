@@ -2,6 +2,7 @@ package scli
 
 import (
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -100,6 +101,22 @@ func (u *upper) FromString(s string) error {
 
 func (u *upper) Example() string {
 	return "lower"
+}
+
+func TestMarkOnceParseTwicePanic(t *testing.T) {
+	defer func() {
+		if e := recover(); e == nil {
+			t.Fatal("should panic")
+		}
+	}()
+	a := MarkOnce[*addr]{}
+	a.FromString("127.0.0.1:80")
+	a.FromString("127.0.0.1:81")
+}
+
+func TestMarkOnceParseOnceOk(t *testing.T) {
+	a := MarkOnce[*addr]{}
+	a.FromString("127.0.0.1:80")
 }
 
 var (
@@ -533,8 +550,31 @@ var (
 		},
 		"-o 4 cmd1 -n1 4 -af",
 		[]string{`option "--af" provided in`, "not defined"},
+	}, { // File operations
+		"not exist file",
+		func(input string) error {
+			var s0 struct {
+				F File[map[string]any, DisableLiveUpdate]
+			}
+			_, err := BuildParser(&s0).ParseArg(input)
+			return err
+		},
+		"a.json",
+		[]string{"open a.json: no such file or directory"},
+	}, {
+		"wrong format file",
+		func(input string) error {
+			var s0 struct {
+				F File[map[string]any, DisableLiveUpdate]
+			}
+			os.WriteFile("a.json", []byte(`{"foo": "bar"`), 0o640)
+			defer os.Remove("a.json")
+			_, err := BuildParser(&s0).ParseArg(input)
+			return err
+		},
+		"a.json",
+		[]string{"[unexpected end of JSON input]"},
 	}}
-	// TODO: add file tests
 
 	parseOkCase = []struct {
 		about string
@@ -817,8 +857,134 @@ var (
 			_, err := BuildParser(&s0).ParseArg("a00")
 			return s0, s1, err
 		},
+	}, {
+		"should not check json file example",
+		func() (any, any, error) {
+			type A struct {
+				Foo string `json:"foofoo"`
+			}
+			var s0 struct {
+				F File[A, DisableLiveUpdate] `example:"v.json"`
+			}
+			s1 := A{Foo: "bar"}
+			os.WriteFile("a.json", []byte(`{"foofoo": "bar"}`), 0o640)
+			defer os.Remove("a.json")
+			_, err := BuildParser(&s0).ParseArg("a.json")
+			return *s0.F.Get(), s1, err
+		},
+	}, {
+		"valid json file",
+		func() (any, any, error) {
+			type A struct {
+				Foo string `json:"foofoo"`
+			}
+			var s0 struct {
+				F File[A, DisableLiveUpdate]
+			}
+			s1 := A{Foo: "bar"}
+			os.WriteFile("a.json", []byte(`{"foofoo": "bar"}`), 0o640)
+			defer os.Remove("a.json")
+			_, err := BuildParser(&s0).ParseArg("a.json")
+			return *s0.F.Get(), s1, err
+		},
+	}, {
+		"valid json file live update",
+		func() (any, any, error) {
+			type A struct {
+				Foo string `json:"foofoo"`
+			}
+			var s0 struct {
+				F File[A, EnableLiveUpdate]
+			}
+			s1 := A{Foo: "baz"}
+			os.WriteFile("a.json", []byte(`{"foofoo": "bar"}`), 0o640)
+			defer os.Remove("a.json")
+			_, err := BuildParser(&s0).ParseArg("a.json")
+			os.WriteFile("a.json", []byte(`{"foofoo": "baz"}`), 0o640)
+			<-s0.F.UpdateEvents()
+			return *s0.F.Get(), s1, err
+		},
+	}, {
+		"json default file",
+		func() (any, any, error) {
+			type A struct {
+				Foo string `json:"foofoo"`
+			}
+			var s0 struct {
+				F File[A, DisableLiveUpdate] `default:"default.json"`
+			}
+			s1 := A{Foo: "bar"}
+			os.WriteFile("default.json", []byte(`{"foofoo": "bar"}`), 0o640)
+			defer os.Remove("default.json")
+
+			// no arg given, parser will use default
+			_, err := BuildParser(&s0).ParseArg("")
+			return *s0.F.Get(), s1, err
+		},
+	}, {
+		"json default file live update",
+		func() (any, any, error) {
+			type A struct {
+				Foo string `json:"foofoo"`
+			}
+			var s0 struct {
+				F File[A, EnableLiveUpdate] `default:"default.json"`
+			}
+			s1 := A{Foo: "baz"}
+			os.WriteFile("default.json", []byte(`{"foofoo": "bar"}`), 0o640)
+			defer os.Remove("default.json")
+
+			// no arg given, parser will use default
+			_, err := BuildParser(&s0).ParseArg("")
+			os.WriteFile("default.json", []byte(`{"foofoo": "baz"}`), 0o640)
+			<-s0.F.UpdateEvents()
+			return *s0.F.Get(), s1, err
+		},
+	}, {
+		"slice of files",
+		func() (any, any, error) {
+			type A struct {
+				Foo string `json:"foofoo"`
+			}
+			var s0 struct {
+				F []File[A, DisableLiveUpdate]
+			}
+			s1 := []A{{Foo: "aar"}, {Foo: "bar"}}
+			os.WriteFile("a.json", []byte(`{"foofoo": "aar"}`), 0o640)
+			defer os.Remove("a.json")
+			os.WriteFile("b.json", []byte(`{"foofoo": "bar"}`), 0o640)
+			defer os.Remove("b.json")
+
+			// no arg given, parser will use default
+			_, err := BuildParser(&s0).ParseArg("a.json b.json")
+			return []A{*s0.F[0].Get(), *s0.F[1].Get()},
+				s1, err
+		},
+	}, {
+		"slice of files live update",
+		func() (any, any, error) {
+			type A struct {
+				Foo string `json:"foofoo"`
+			}
+			var s0 struct {
+				F []File[A, EnableLiveUpdate]
+			}
+			s1 := []A{{Foo: "aaar"}, {Foo: "bbar"}}
+			os.WriteFile("a.json", []byte(`{"foofoo": "aar"}`), 0o640)
+			defer os.Remove("a.json")
+			os.WriteFile("b.json", []byte(`{"foofoo": "bar"}`), 0o640)
+			defer os.Remove("b.json")
+
+			// no arg given, parser will use default
+			_, err := BuildParser(&s0).ParseArg("a.json b.json")
+			os.WriteFile("a.json", []byte(`{"foofoo": "aaar"}`), 0o640)
+			os.WriteFile("b.json", []byte(`{"foofoo": "bbar"}`), 0o640)
+			<-s0.F[0].UpdateEvents()
+			<-s0.F[1].UpdateEvents()
+			return []A{*s0.F[0].Get(), *s0.F[1].Get()},
+				s1, err
+		},
 	}}
-	// TODO: add file tests
 )
 
 func TestPanic(t *testing.T) {
