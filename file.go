@@ -2,6 +2,7 @@ package scli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -91,9 +92,6 @@ func (f *File[T, L]) FromString(source string) error {
 	}
 
 	err := f.fromString(source)
-	if err != nil {
-		return err
-	}
 
 	// watchChange starts only once
 	// because FromString should be called only once
@@ -101,8 +99,22 @@ func (f *File[T, L]) FromString(source string) error {
 		f.events = make(chan fsnotify.Event, 8)
 		f.watchChange(source)
 	}
+
+	if err != nil {
+		return err
+	}
 	return nil
 }
+
+func forwardByteParse(data []byte, v any) error {
+	if ptr, ok := v.(*[]byte); ok {
+		*ptr = data
+		return nil
+	}
+	return errors.New("v is not []byte")
+}
+
+var _ unmarshalFn = forwardByteParse
 
 func (f *File[T, L]) fromString(source string) error {
 	content, err := os.ReadFile(source)
@@ -112,6 +124,7 @@ func (f *File[T, L]) fromString(source string) error {
 
 	parseOrder := []unmarshalFn{
 		json.Unmarshal, yaml.Unmarshal, toml.Unmarshal,
+		forwardByteParse,
 	}
 	if strings.HasSuffix(source, ".yaml") || strings.HasSuffix(source, ".yml") {
 		parseOrder = []unmarshalFn{yaml.Unmarshal}
@@ -218,6 +231,9 @@ func (f *File[T, L]) UpdateEvents() <-chan fsnotify.Event {
 	// concurrently in a uncontrolled way. For example: when change comes,
 	// previous and this change's callback are running concurrently.
 	// Channels don't.
+	//
+	// TODO: This seems not a problem?
+	// maybe change this to UpdateEvent(callback(*T, fsnotify.Event))?
 	return f.events
 }
 
